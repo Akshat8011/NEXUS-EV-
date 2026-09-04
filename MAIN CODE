@@ -1,0 +1,1373 @@
+import tkinter as tk
+from tkinter import ttk, font, Toplevel, Scrollbar
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import random
+import requests # For all APIs
+import json
+import threading # For background fetching & notifications
+from datetime import datetime
+import time     # For background loop
+import urllib.parse # For Geocoding location names
+
+class UltimateEVHubApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("The Ultimate EV Home Energy Hub")
+        self.root.geometry("1800x950")
+        self.root.configure(bg="#2E3440")
+
+        # --- 1.a. GUI STYLING (DARK THEME) ---
+        self.style = ttk.Style(self.root)
+        self.style.theme_use('clam') # Use a theme that allows full customization
+
+        # Define theme colors
+        BG_ROOT = "#2E3440" # Main window
+        BG_FRAME = "#3B4252" # Frames and canvas
+        TEXT_COLOR = "white"
+        ACCENT_COLOR = "#88C0D0" # A light blue from the theme
+        self.EV_ICON_COLOR = "#A3BE8C" # Store original EV color
+        
+        # Configure all widget styles
+        self.style.configure('.', 
+                             background=BG_FRAME, 
+                             foreground=TEXT_COLOR, 
+                             fieldbackground=BG_FRAME, 
+                             bordercolor=ACCENT_COLOR)
+
+        self.style.configure('TFrame', 
+                             background=BG_FRAME)
+        
+        self.style.configure('TLabel', 
+                             background=BG_FRAME, 
+                             foreground=TEXT_COLOR, 
+                             font=("Helvetica", 10)) # Standardize font
+        
+        self.style.configure('TLabelframe', 
+                             background=BG_FRAME,
+                             labelmargins=(10, 5, 10, 5))
+        
+        self.style.configure('TLabelframe.Label', 
+                             background=BG_FRAME, 
+                             foreground=TEXT_COLOR, 
+                             font=("Helvetica", 11, "bold")) # Make frame titles clearer
+
+        self.style.configure('TButton', 
+                             background=ACCENT_COLOR, 
+                             foreground="#2E3440", # Dark text on light button
+                             font=("Helvetica", 10, "bold"),
+                             padding=(10, 5))
+        
+        self.style.map('TButton', 
+                       background=[('active', '#A3BE8C'), ('disabled', '#4C566A')],
+                       foreground=[('disabled', '#616E88')]) # Darker disabled text
+                       
+        self.style.configure('TEntry',
+                             foreground=TEXT_COLOR,
+                             fieldbackground="#4C566A",
+                             insertcolor=TEXT_COLOR)
+
+        self.style.configure('Horizontal.TProgressbar', 
+                             background=ACCENT_COLOR, 
+                             troughcolor=BG_ROOT)
+
+        self.style.configure('Horizontal.TScale', 
+                             background=BG_FRAME, 
+                             troughcolor=BG_ROOT)
+                             
+        # Style for the new Treeview (Charger List)
+        self.style.configure("Treeview", 
+                             background="#4C566A",
+                             fieldbackground="#4C566A",
+                             foreground="white",
+                             rowheight=25)
+        self.style.map("Treeview", 
+                       background=[('selected', ACCENT_COLOR)],
+                       foreground=[('selected', BG_ROOT)])
+        self.style.configure("Treeview.Heading", 
+                             background=BG_FRAME,
+                             font=("Helvetica", 10, "bold"))
+
+        # --- 1. CORE PARAMETERS ---
+        self.ev_capacity_kwh = 79.0
+        self.ev_max_range_km = 500.0
+        self.home_battery_capacity_kwh = 10.0
+        self.charge_rate_kw, self.v2g_rate_kw = 12.5, 6.0
+        self.fixed_buffer_km = 50.0
+
+        self.create_smooth_profiles()
+
+        self.residential_rate, self.commercial_rate = 7.5, 13.5
+        
+        # --- 2. API & KEY PARAMETERS ---
+        # Weather
+        self.weather_api_key = "5732858291c7dd38aa164e4ceb8f578d"
+        self.city_lat = "26.8467"
+        self.city_lon = "80.9462"
+        self.weather_data = {} # To store both current and forecast
+        
+        # Trip Planner
+        self.openrouteservice_api_key = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjM1MzliYjJlY2ViNTRkYWZhYzUzYzYwNGFhMDlmMGY2IiwiaCI6Im11cm11cjY0In0="
+        self.openchargemap_api_key = "aefe1d29-ce77-4e27-b953-ecb2192998e5"
+        
+        # --- 3. NOTIFICATION PARAMETERS ---
+        self.phone_notification_topic = "myev_alerts"
+        self.trip_notification_topic = "MyEvTrip_alerts"
+        # --- Topics for 2-way control ---
+        self.command_notification_topic = "myev_commands"
+        self.status_notification_topic = "myev_status"
+        
+        self.last_alert_mode = "" # For alert spam prevention
+        self.last_status_send_time = 0 # For throttling status updates
+        
+        # --- State variable for remote control ---
+        self.is_ev_plugged_in = True # Default to plugged in at start
+        
+        # --- 4. GUI SETUP ---
+        self.setup_gui_layout()
+        self.reset_simulation_state()
+        
+        # --- 5. Start background threads ---
+        self.start_weather_fetch()
+        self.start_command_listener() # Start the new command listener
+
+    def create_smooth_profiles(self):
+        """Interpolates hourly data to create smooth, minute-by-minute curves."""
+        hourly_times = np.arange(25)
+        self.minute_times = np.linspace(0, 24, 24 * 60, endpoint=False)
+        
+        home_load_hourly = [0.8,0.6,0.5,0.5,0.6,0.8,1.2,1.5,1.8,2.0,2.5,3.0,3.5,3.2,3.0,2.8,2.5,2.8,3.5,3.0,2.5,2.0,1.5,1.0, 0.8]
+        solar_hourly = np.array([0,0,0,0,0,0.1,0.8,2.0,4.5,6.0,8.0,10.0,9.5,8.0,6.0,4.0,2.0,0.5,0,0,0,0,0,0, 0]) * 5.0
+        
+        self.home_load_profile = np.interp(self.minute_times, hourly_times, home_load_hourly)
+        self.solar_profile = np.interp(self.minute_times, hourly_times, solar_hourly)
+
+    def setup_gui_layout(self):
+        # --- Create a master control panel frame that won't shrink
+        control_panel_master = ttk.Frame(self.root, width=350) # Give it a fixed width
+        control_panel_master.pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=10)
+        control_panel_master.pack_propagate(False) # Prevent it from shrinking to fit content
+
+        # --- Create a Canvas and Scrollbar for scrolling
+        scroll_canvas = tk.Canvas(control_panel_master, bg="#3B4252", highlightthickness=0)
+        scrollbar = ttk.Scrollbar(control_panel_master, orient="vertical", command=scroll_canvas.yview)
+        scroll_canvas.configure(yscrollcommand=scrollbar.set)
+        
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        scroll_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # --- This is the frame that will hold all our widgets
+        scrollable_frame = ttk.Frame(scroll_canvas)
+
+        # --- This binds the canvas to the frame's size
+        scroll_canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        
+        # Make the scrollable_frame fill the width of the canvas
+        def on_canvas_configure(event):
+            scroll_canvas.itemconfig('all', width=event.width)
+            
+        scroll_canvas.bind('<Configure>', on_canvas_configure)
+        scrollable_frame.bind("<Configure>", lambda e: scroll_canvas.configure(scrollregion=scroll_canvas.bbox("all")))
+
+        # --- Main content pane ---
+        main_pane = tk.PanedWindow(self.root, orient=tk.HORIZONTAL, sashrelief=tk.RAISED, bg="#4C566A")
+        main_pane.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        diagram_container = ttk.Frame(main_pane, width=1100) 
+        plots_container = ttk.Frame(main_pane, width=700)
+        
+        main_pane.add(diagram_container)
+        main_pane.add(plots_container)
+
+        # --- Pass the *scrollable* frame to the setup function
+        self.setup_control_panel(scrollable_frame)
+        self.setup_power_flow_diagram(diagram_container)
+        self.setup_analytics_plots(plots_container)
+        
+    def setup_control_panel(self, parent):
+        sim_frame = ttk.LabelFrame(parent, text="Simulation Control")
+        sim_frame.pack(fill=tk.X, pady=5)
+        self.start_button = ttk.Button(sim_frame, text="Start 24-Hour Day", command=self.start_simulation)
+        self.start_button.pack(fill=tk.X, padx=10, pady=5)
+        
+        self.pause_button = ttk.Button(sim_frame, text="Pause Simulation", command=self.pause_sim, state=tk.DISABLED)
+        self.pause_button.pack(fill=tk.X, padx=10, pady=5)
+        self.resume_button = ttk.Button(sim_frame, text="Resume Simulation", command=self.resume_sim, state=tk.DISABLED)
+        self.resume_button.pack(fill=tk.X, padx=10, pady=5)
+        
+        status_frame = ttk.LabelFrame(parent, text="System Status")
+        status_frame.pack(fill=tk.X, pady=5)
+        self.time_var = tk.StringVar(value="00:00")
+        self.mode_var = tk.StringVar(value="Mode: Ready")
+        self.soc_text_var = tk.StringVar()
+        self.range_text_var = tk.StringVar()
+        # --- Plug Status Label ---
+        self.plug_status_var = tk.StringVar(value="EV: Plugged In")
+
+        ttk.Label(status_frame, text="Current Time:").pack(anchor='w', padx=10)
+        ttk.Label(status_frame, textvariable=self.time_var, font=("Helvetica", 16, "bold")).pack(anchor='w', padx=10)
+        
+        self.soc_progress = ttk.Progressbar(status_frame, orient='horizontal', length=200, mode='determinate', style='Horizontal.TProgressbar')
+        self.soc_progress.pack(fill=tk.X, padx=10, pady=5)
+        ttk.Label(status_frame, textvariable=self.soc_text_var, font=("Helvetica", 12, "bold")).pack(anchor='w', padx=10)
+        ttk.Label(status_frame, textvariable=self.range_text_var, font=("Helvetica", 10)).pack(anchor='w', padx=10)
+        
+        self.mode_label = ttk.Label(status_frame, textvariable=self.mode_var, font=("Helvetica", 14, "bold"))
+        self.mode_label.pack(pady=(10, 0))
+        
+        # --- Plug Status Label Added to GUI ---
+        self.plug_status_label = ttk.Label(status_frame, textvariable=self.plug_status_var, font=("Helvetica", 12, "bold"))
+        self.plug_status_label.pack(pady=(0, 10))
+
+        # --- Weather Status Frame ---
+        weather_frame = ttk.LabelFrame(parent, text="Weather (Lucknow)")
+        weather_frame.pack(fill=tk.X, pady=5)
+        
+        self.weather_desc_var = tk.StringVar(value="Loading...")
+        self.weather_temp_var = tk.StringVar(value="--°C")
+        self.weather_vis_var = tk.StringVar(value="Vis: -- km")
+        self.weather_uv_var = tk.StringVar(value="UV Index: --")
+        self.weather_aqi_var = tk.StringVar(value="PM2.5: --") # AQI variable
+
+        ttk.Label(weather_frame, textvariable=self.weather_desc_var, font=("Helvetica", 14, "bold")).pack(pady=(5,0))
+        ttk.Label(weather_frame, textvariable=self.weather_temp_var, font=("Helvetica", 12)).pack()
+        ttk.Label(weather_frame, textvariable=self.weather_vis_var, font=("Helvetica", 10)).pack()
+        ttk.Label(weather_frame, textvariable=self.weather_uv_var, font=("Helvetica", 10)).pack()
+        
+        self.aqi_label = ttk.Label(weather_frame, textvariable=self.weather_aqi_var, font=("Helvetica", 10, "bold"))
+        self.aqi_label.pack(pady=(0,5))
+        
+        self.forecast_button = ttk.Button(weather_frame, text="Show 5-Day Forecast", command=self.show_forecast_window, state=tk.DISABLED)
+        self.forecast_button.pack(fill=tk.X, padx=10, pady=(0, 5))
+
+        settings_frame = ttk.LabelFrame(parent, text="User Settings")
+        settings_frame.pack(fill=tk.X, pady=5)
+        
+        self.min_range_label_var = tk.StringVar()
+        ttk.Label(settings_frame, text="V2G Reserve Range:", font=("Helvetica", 10)).pack(anchor="w", padx=10, pady=(5,0))
+        ttk.Label(settings_frame, textvariable=self.min_range_label_var, font=("Helvetica", 9, "italic")).pack(anchor="w", padx=10)
+        
+        self.min_range_slider = ttk.Scale(settings_frame, from_=0, to=450, command=self.update_min_range_label, style='Horizontal.TScale')
+        self.min_range_slider.set(80)
+        self.min_range_slider.pack(fill=tk.X, padx=10, pady=2)
+
+        grid_control_frame = ttk.LabelFrame(parent, text="Grid Services")
+        grid_control_frame.pack(fill=tk.X, pady=5)
+        self.grid_status_var = tk.StringVar(value="Grid: CONNECTED")
+        self.grid_status_label = ttk.Label(grid_control_frame, textvariable=self.grid_status_var, font=("Helvetica", 12, "bold"))
+        self.grid_status_label.pack(pady=5)
+        ttk.Button(grid_control_frame, text="Simulate Grid Failure", command=self.simulate_grid_failure).pack(fill=tk.X, padx=10)
+        ttk.Button(grid_control_frame, text="Restore Grid Power", command=self.restore_grid).pack(fill=tk.X, padx=10, pady=5)
+        
+        # --- Trip Planner (REPLACED) ---
+        trip_frame = ttk.LabelFrame(parent, text="EV Trip")
+        trip_frame.pack(fill=tk.X, pady=5)
+        # This button now opens the new, simpler window
+        ttk.Button(trip_frame, text="Open My EV Trip", command=self.open_my_ev_trip).pack(fill=tk.X, padx=10, pady=5)
+
+        financials_frame = ttk.LabelFrame(parent, text="Financials")
+        financials_frame.pack(fill=tk.X, pady=5)
+        self.net_var = tk.StringVar(value="Net Profit: ₹0.00")
+        ttk.Label(financials_frame, textvariable=self.net_var, font=("Helvetica", 14, "bold")).pack(pady=5)
+
+    def update_min_range_label(self, value):
+        val = int(float(value))
+        total_needed = val + self.fixed_buffer_km
+        self.min_range_label_var.set(f"{val} km + {self.fixed_buffer_km}km buffer = {total_needed}km")
+
+    # --- Weather Functions ---
+    def start_weather_fetch(self):
+        """Starts fetching weather data in a separate thread."""
+        weather_thread = threading.Thread(target=self.fetch_weather_data, daemon=True)
+        weather_thread.start()
+
+    def fetch_weather_data(self):
+        """Fetches current weather, forecast, and AQI from OpenWeatherMap."""
+        
+        while True: # Run continuously in the background
+            try:
+                # 1. Fetch Current Weather
+                current_url = f"https://api.openweathermap.org/data/2.5/weather?lat={self.city_lat}&lon={self.city_lon}&appid={self.weather_api_key}&units=metric"
+                current_response = requests.get(current_url)
+                current_response.raise_for_status() # Raises an error for bad responses
+                self.weather_data['current'] = current_response.json()
+                
+                # 2. Fetch 5-Day Forecast
+                forecast_url = f"https://api.openweathermap.org/data/2.5/forecast?lat={self.city_lat}&lon={self.city_lon}&appid={self.weather_api_key}&units=metric"
+                forecast_response = requests.get(forecast_url)
+                forecast_response.raise_for_status()
+                self.weather_data['forecast'] = forecast_response.json()
+                
+                # 3. Fetch Air Pollution (AQI)
+                air_url = f"https://api.openweathermap.org/data/2.5/air_pollution?lat={self.city_lat}&lon={self.city_lon}&appid={self.weather_api_key}"
+                air_response = requests.get(air_url)
+                air_response.raise_for_status()
+                self.weather_data['air_pollution'] = air_response.json()
+
+                # 4. Schedule UI update on the main thread
+                self.root.after(0, self.update_weather_display)
+                
+                # Wait 10 minutes before the next refresh
+                time.sleep(600) # (10 minutes * 60 seconds)
+                
+            except requests.RequestException as e:
+                # Handle API errors gracefully in the UI
+                self.root.after(0, self.show_weather_error, str(e))
+                # If an error occurs, wait 5 minutes before retrying
+                time.sleep(300)
+
+    def update_weather_display(self):
+        """Updates the Tkinter labels with the fetched weather data."""
+        try:
+            # Update Current Weather
+            current = self.weather_data.get('current')
+            if current:
+                description = current['weather'][0]['main']
+                temp = current['main']['temp']
+                visibility_m = current.get('visibility', 10000)
+                visibility_km = visibility_m / 1000.0
+
+                if description == "Clear":
+                    uv_index = 3
+                elif description in ["Clouds", "Haze", "Fog", "Mist"]:
+                    uv_index = 2
+                elif description in ["Rain", "Drizzle", "Thunderstorm", "Snow"]:
+                    uv_index = 1
+                else:
+                    uv_index = 2
+
+                self.weather_desc_var.set(f"{description}")
+                self.weather_temp_var.set(f"{temp:.1f}°C")
+                self.weather_vis_var.set(f"Vis: {visibility_km:.1f} km")
+                self.weather_uv_var.set(f"UV Index: {uv_index} (Est.)")
+            else:
+                self.show_weather_error("No current data.")
+                return # Don't proceed if current data failed
+
+            # Update AQI (PM2.5)
+            air_data = self.weather_data.get('air_pollution')
+            if air_data and air_data.get('list'):
+                pm2_5 = air_data['list'][0]['components'].get('pm2_5', 0)
+                self.weather_aqi_var.set(f"PM2.5: {pm2_5:.1f} µg/m³")
+                
+                # Set color based on PM2.5 value
+                if pm2_5 > 155:
+                    self.aqi_label.config(foreground="#FF5555") # Bright Red
+                elif 80 <= pm2_5 <= 155:
+                    self.aqi_label.config(foreground="#FFFF66") # Bright Yellow
+                else: # < 80
+                    self.aqi_label.config(foreground="#66FF66") # Bright Green
+            else:
+                self.weather_aqi_var.set("PM2.5: N/A")
+                self.aqi_label.config(foreground="white")
+
+            # Enable the forecast button
+            if self.weather_data.get('forecast'):
+                self.forecast_button.config(state=tk.NORMAL)
+                
+        except Exception as e:
+            self.show_weather_error(f"Parse error: {e}")
+            if hasattr(self, 'aqi_label'):
+                self.weather_aqi_var.set("PM2.5: Error")
+                self.aqi_label.config(foreground="white")
+
+
+    def show_weather_error(self, error_msg):
+        """Displays an error message in the weather panel."""
+        self.weather_desc_var.set("Weather Error")
+        self.weather_temp_var.set(error_msg)
+        self.weather_vis_var.set("")
+        self.weather_uv_var.set("")
+        self.forecast_button.config(state=tk.DISABLED)
+        # Also reset AQI label
+        if hasattr(self, 'aqi_label'):
+            self.weather_aqi_var.set("PM2.5: Error")
+            self.aqi_label.config(foreground="white")
+
+    def show_forecast_window(self):
+        """Creates a new Toplevel window to display the 5-day forecast."""
+        forecast_data = self.weather_data.get('forecast')
+        if not forecast_data:
+            return
+
+        forecast_win = Toplevel(self.root)
+        forecast_win.title("5-Day Weather Forecast (Lucknow)")
+        forecast_win.geometry("350x400")
+        forecast_win.configure(bg="#3B4252")
+        
+        ttk.Label(forecast_win, text="5-Day Forecast (12:00 PM)", font=("Helvetica", 16, "bold")).pack(pady=10)
+        
+        daily_forecasts = []
+        for item in forecast_data['list']:
+            if "12:00:00" in item['dt_txt']:
+                daily_forecasts.append(item)
+        
+        if not daily_forecasts: # Fallback if no 12:00 PM data
+            unique_days = {}
+            for item in forecast_data['list']:
+                day = item['dt_txt'].split(' ')[0]
+                if day not in unique_days:
+                    unique_days[day] = item
+            daily_forecasts = list(unique_days.values())[1:6]
+
+        for item in daily_forecasts:
+            try:
+                dt_obj = datetime.strptime(item['dt_txt'], '%Y-%m-%d %H:%M:%S')
+                day_name = dt_obj.strftime('%A (%d %b)')
+                temp = item['main']['temp']
+                desc = item['weather'][0]['description'].title()
+                
+                frame = ttk.Frame(forecast_win, padding=5, style='TFrame')
+                frame.pack(fill=tk.X, padx=10, pady=2)
+                
+                ttk.Label(frame, text=day_name, font=("Helvetica", 12, "bold"), anchor="w").pack(fill=tk.X)
+                ttk.Label(frame, text=f"{temp:.1f}°C, {desc}", font=("Helvetica", 10), anchor="w").pack(fill=tk.X)
+            except Exception:
+                continue
+
+    # --- Notification Functions ---
+    def send_alert(self, title, message, topic=None):
+        """Sends phone notifications in a separate thread.
+        Can optionally specify a different topic."""
+        threading.Thread(target=self._send_alert_thread, args=(title, message, topic), daemon=True).start()
+
+    def _send_alert_thread(self, title, message, topic):
+        """Internal function that runs in a thread to send alerts."""
+        
+        # Use the provided topic, or default to the main one
+        if topic is None:
+            target_topic = self.phone_notification_topic
+        else:
+            target_topic = topic
+
+        # Phone Notification (ntfy.sh)
+        if "your-secret-ntfy-topic" in target_topic: # Check for default
+            print(f"Notification topic '{target_topic}' not set. Skipping phone alert.")
+            return 
+        try:
+            requests.post(
+                f"https://ntfy.sh/{target_topic}",
+                data=message.encode('utf-8'), # Encode for reliability
+                headers={"Title": title}
+            )
+        except Exception as e:
+            # Non-critical, just log to console
+            print(f"Phone notification failed: {e}")
+
+    # --- NEW: Remote Control Functions ---
+    
+    def start_command_listener(self):
+        """Starts the ntfy.sh command listener in a separate thread."""
+        print(f"Starting command listener on topic: {self.command_notification_topic}")
+        listener_thread = threading.Thread(target=self.listen_for_commands, daemon=True)
+        listener_thread.start()
+
+    def listen_for_commands(self):
+        """(Worker Thread) Listens for commands from ntfy.sh."""
+        while True:
+            try:
+                # Use a streaming GET request to listen for new messages
+                response = requests.get(
+                    f"https://ntfy.sh/{self.command_notification_topic}/json",
+                    stream=True,
+                    timeout=None # Listen forever
+                )
+                print("Command listener connected.")
+                for line in response.iter_lines():
+                    if line:
+                        try:
+                            # Parse the JSON event stream
+                            data = json.loads(line.decode('utf-8'))
+                            if data.get('event') == 'message':
+                                command = data.get('message', '').strip().lower()
+                                
+                                # --- UPDATED: List of all valid commands ---
+                                valid_commands = [
+                                    "plug", "unplug", "send soc", "send range", 
+                                    "honk", "flash lights", "get weather", 
+                                    "get aqi", "party mode", "get home soc"
+                                ]
+
+                                if command in valid_commands:
+                                    print(f"Received command: {command}")
+                                    # Safely pass the command to the main thread
+                                    self.root.after(0, self.process_command, command)
+                        except json.JSONDecodeError:
+                            continue # Ignore invalid JSON
+            except requests.RequestException as e:
+                print(f"Command listener error: {e}. Reconnecting in 5s...")
+                time.sleep(5) # Wait before retrying
+
+    def process_command(self, command):
+        """(Main Thread) Processes commands received from the listener."""
+        if command == "plug":
+            self.is_ev_plugged_in = True
+            # self.plug_status_var.set("EV: Plugged In") # update_dashboard handles this
+            # self.plug_status_label.config(foreground="lightgreen")
+            self.send_alert("EV Remote Control", "EV has been plugged in remotely.", topic=self.phone_notification_topic)
+        
+        elif command == "unplug":
+            self.is_ev_plugged_in = False
+            # self.plug_status_var.set("EV: Unplugged") # update_dashboard handles this
+            # self.plug_status_label.config(foreground="#BF616A") # Red
+            self.send_alert("EV Remote Control", "EV has been unplugged remotely.", topic=self.phone_notification_topic)
+        
+        elif command == "send soc":
+            self.send_manual_status("soc")
+        
+        elif command == "send range":
+            self.send_manual_status("range")
+        
+        # --- NEW: Get Home SOC ---
+        elif command == "get home soc":
+            self.send_manual_status("home_soc")
+
+        # --- NEW: Weather/AQI Commands ---
+        elif command == "get weather":
+            self.send_manual_status("weather")
+        
+        elif command == "get aqi":
+            self.send_manual_status("aqi")
+
+        # --- NEW: Fun Commands ---
+        elif command == "honk":
+            self.send_alert("EV Remote Control", "Honk Honk!", topic=self.phone_notification_topic)
+            self.root.bell() # Play system alert sound
+            self.flash_ev_icon()
+
+        elif command == "flash lights":
+            self.send_alert("EV Remote Control", "Flashing lights!", topic=self.phone_notification_topic)
+            self.root.bell() # Play system alert sound
+            self.flash_ev_icon()
+        
+        # --- NEW: Party Mode Command ---
+        elif command == "party mode":
+            self.send_alert("🥳 EV Remote Control 🥳", "Party Mode Activated!", topic=self.phone_notification_topic)
+            self.party_mode_flash(3) # Flash 3 times
+
+    def send_manual_status(self, requested_info):
+        """(Main Thread) Sends a one-time status update on command."""
+        if requested_info == "soc":
+            message = f"Manual Request: EV SOC is {self.ev_soc:.1f}%"
+            self.send_alert("EV Status", message, topic=self.status_notification_topic)
+        
+        elif requested_info == "range":
+            range_km = self.ev_soc / 100 * self.ev_max_range_km
+            message = f"Manual Request: Range is {range_km:.1f} km"
+            self.send_alert("EV Status", message, topic=self.status_notification_topic)
+        
+        # --- NEW: Home SOC Status ---
+        elif requested_info == "home_soc":
+            message = f"Manual Request: Home Battery is {self.home_battery_soc:.1f}%"
+            self.send_alert("EV Status", message, topic=self.status_notification_topic)
+
+        # --- NEW: Weather/AQI Status ---
+        elif requested_info == "weather":
+            if self.weather_data.get('current'):
+                desc = self.weather_data['current']['weather'][0]['main']
+                temp = self.weather_data['current']['main']['temp']
+                message = f"Manual Request: Weather is {desc}, {temp:.1f}°C"
+                self.send_alert("EV Status", message, topic=self.status_notification_topic)
+            else:
+                self.send_alert("EV Status", "Weather data not loaded yet.", topic=self.status_notification_topic)
+
+        elif requested_info == "aqi":
+            if self.weather_data.get('air_pollution'):
+                pm2_5 = self.weather_data['air_pollution']['list'][0]['components'].get('pm2_5', 0)
+                message = f"Manual Request: PM2.5 is {pm2_5:.1f} µg/m³"
+                self.send_alert("EV Status", message, topic=self.status_notification_topic)
+            else:
+                self.send_alert("EV Status", "AQI data not loaded yet.", topic=self.status_notification_topic)
+
+
+    def flash_ev_icon(self):
+        """(Main Thread) Flashes the EV icon on the canvas."""
+        if hasattr(self, 'ev_oval'): # Check if canvas is drawn
+            self.canvas.itemconfig(self.ev_oval, fill="#FFFFFF") # Flash white
+            # Schedule to revert to original color
+            self.root.after(300, lambda: self.canvas.itemconfig(self.ev_oval, fill=self.EV_ICON_COLOR))
+
+    # --- NEW: Helper for Party Mode ---
+    def party_mode_flash(self, count):
+        """(Main Thread) Helper to flash icon multiple times."""
+        if count <= 0:
+            return # Stop flashing
+        
+        self.flash_ev_icon()
+        self.root.bell()
+        # Schedule the next flash
+        self.root.after(600, self.party_mode_flash, count - 1)
+
+    # --- END: Remote Control Functions ---
+
+    # --- Simplified "My EV Trip" Functions ---
+    def open_my_ev_trip(self):
+        """Opens the new, simplified trip Toplevel window using .pack()"""
+        self.trip_win = Toplevel(self.root)
+        self.trip_win.title("My EV Trip")
+        self.trip_win.geometry("500x650")
+        self.trip_win.configure(bg="#3B4252")
+
+        # --- 1. Route Adviser ---
+        route_frame = ttk.LabelFrame(self.trip_win, text="Route Adviser")
+        route_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        # --- Simple layout using frames and .pack() ---
+        
+        # Start Location
+        frame_start = ttk.Frame(route_frame)
+        frame_start.pack(fill=tk.X, padx=10, pady=2)
+        ttk.Label(frame_start, text="Start Location:", width=15).pack(side=tk.LEFT)
+        self.route_start_entry = ttk.Entry(frame_start)
+        self.route_start_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        self.route_start_entry.insert(0, "Lucknow")
+
+        # End Location
+        frame_end = ttk.Frame(route_frame)
+        frame_end.pack(fill=tk.X, padx=10, pady=2)
+        ttk.Label(frame_end, text="End Location:", width=15).pack(side=tk.LEFT)
+        self.route_end_entry = ttk.Entry(frame_end)
+        self.route_end_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        self.route_end_entry.insert(0, "Delhi")
+
+        # Starting SOC
+        frame_soc = ttk.Frame(route_frame)
+        frame_soc.pack(fill=tk.X, padx=10, pady=2)
+        ttk.Label(frame_soc, text="Starting SOC (%):", width=15).pack(side=tk.LEFT)
+        self.route_soc_entry = ttk.Entry(frame_soc, width=10)
+        self.route_soc_entry.pack(side=tk.LEFT, padx=5)
+        self.route_soc_entry.insert(0, f"{self.ev_soc:.0f}")
+        
+        # --- Button and Status Label ---
+        self.route_check_button = ttk.Button(route_frame, text="Check Route", command=self.start_route_adviser_check)
+        self.route_check_button.pack(pady=5)
+
+        self.route_status_var = tk.StringVar(value="Enter details and check your route.")
+        ttk.Label(route_frame, textvariable=self.route_status_var, font=("Helvetica", 10, "italic"), wraplength=450).pack(pady=5, padx=10)
+
+
+        # --- 2. Find Nearby Chargers ---
+        find_frame = ttk.LabelFrame(self.trip_win, text="Find Nearby Chargers")
+        find_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Location Input
+        frame_find_loc = ttk.Frame(find_frame)
+        frame_find_loc.pack(fill=tk.X, padx=10, pady=5)
+        ttk.Label(frame_find_loc, text="Location:", width=15).pack(side=tk.LEFT)
+        self.find_loc_entry = ttk.Entry(frame_find_loc)
+        self.find_loc_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        self.find_loc_entry.insert(0, "Lucknow")
+        
+        self.find_chargers_button = ttk.Button(find_frame, text="Find Chargers", command=self.start_find_chargers_check)
+        self.find_chargers_button.pack(pady=5)
+
+        self.find_status_var = tk.StringVar(value="Enter a location to find chargers.")
+        ttk.Label(find_frame, textvariable=self.find_status_var, font=("Helvetica", 10, "italic")).pack(pady=5, padx=10)
+
+        # --- Charger List (Treeview) for Find Nearby ---
+        charger_frame = ttk.Frame(find_frame)
+        charger_frame.pack(fill=tk.BOTH, expand=True, pady=5, padx=10)
+        
+        list_scroll = ttk.Scrollbar(charger_frame, orient=tk.VERTICAL)
+        # --- MODIFIED: Added "Speed" and "Available" columns ---
+        self.find_charger_treeview = ttk.Treeview(charger_frame, 
+                                                  columns=("Charger", "Address", "Speed", "Available"), 
+                                                  show="headings", 
+                                                  height=10,
+                                                  yscrollcommand=list_scroll.set)
+        list_scroll.config(command=self.find_charger_treeview.yview)
+        
+        list_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.find_charger_treeview.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self.find_charger_treeview.heading("Charger", text="Charger Name")
+        self.find_charger_treeview.heading("Address", text="Address")
+        # --- ADDED: Headings for new columns ---
+        self.find_charger_treeview.heading("Speed", text="Speed (kW)")
+        self.find_charger_treeview.heading("Available", text="Available")
+        
+        # --- MODIFIED: Adjusted column widths ---
+        self.find_charger_treeview.column("Charger", width=150, anchor='w')
+        self.find_charger_treeview.column("Address", width=200, anchor='w')
+        self.find_charger_treeview.column("Speed", width=80, anchor='center')
+        self.find_charger_treeview.column("Available", width=80, anchor='center')
+        
+    # --- Route Adviser Functions ---
+    
+    def start_route_adviser_check(self):
+        """Validates inputs and starts the route check in a thread."""
+        start_loc = self.route_start_entry.get()
+        end_loc = self.route_end_entry.get()
+        try:
+            start_soc = float(self.route_soc_entry.get())
+        except ValueError:
+            self.route_status_var.set("Error: Starting SOC must be a number.")
+            return
+
+        if not start_loc or not end_loc:
+            self.route_status_var.set("Error: Start and End locations are required.")
+            return
+
+        self.route_status_var.set("Checking route... Fetching coordinates...")
+        self.route_check_button.config(state=tk.DISABLED)
+
+        threading.Thread(target=self.route_adviser_thread, 
+                         args=(start_loc, end_loc, start_soc), 
+                         daemon=True).start()
+
+    def route_adviser_thread(self, start_loc, end_loc, start_soc):
+        """(Worker Thread) Fetches route distance and updates UI."""
+        try:
+            # --- 1. Get Geocodes for Start/End ---
+            start_coords = self.get_ors_coords(start_loc)
+            end_coords = self.get_ors_coords(end_loc)
+            
+            if not start_coords or not end_coords:
+                self.root.after(0, self.route_status_var.set, "Error: Could not find locations. Be more specific.")
+                # --- FIX: Use lambda to correctly pass arguments to after() ---
+                self.root.after(0, lambda: self.route_check_button.config(state=tk.NORMAL))
+                return
+
+            # --- 2. Get Route Distance from OpenRouteService ---
+            self.root.after(0, self.route_status_var.set, "Calculating route from OpenRouteService...")
+            
+            total_distance_km = self.get_ors_route_distance(start_coords, end_coords)
+            if total_distance_km is None:
+                self.root.after(0, self.route_status_var.set, "Error: Could not calculate route.")
+                # --- FIX: Use lambda to correctly pass arguments to after() ---
+                self.root.after(0, lambda: self.route_check_button.config(state=tk.NORMAL))
+                return
+                
+            current_range_km = (start_soc / 100) * self.ev_max_range_km
+            
+            # --- 3. Update UI (on main thread) ---
+            result_message = f"Total Distance: {total_distance_km:.1f} km.\n"
+            result_message += f"Your Current Range: {current_range_km:.1f} km.\n\n"
+            
+            if total_distance_km > (current_range_km - self.fixed_buffer_km): # Include buffer in check
+                needed = total_distance_km + self.fixed_buffer_km
+                result_message += f"ADVICE: You will need to charge. You need ~{needed:.1f} km of range (including buffer)."
+            else:
+                result_message += "ADVICE: You have enough range to make this trip!"
+
+            self.root.after(0, self.route_status_var.set, result_message)
+            # --- FIX: Use lambda to correctly pass arguments to after() ---
+            self.root.after(0, lambda: self.route_check_button.config(state=tk.NORMAL))
+
+            # --- ADDED: Send notification to the trip topic ---
+            alert_title = f"EV Route: {start_loc} to {end_loc}"
+            self.send_alert(alert_title, result_message, topic=self.trip_notification_topic)
+            # --- End of notification ---
+
+        except Exception as e:
+            self.root.after(0, self.route_status_var.set, f"An error occurred: {e}")
+            # --- FIX: Use lambda to correctly pass arguments to after() ---
+            self.root.after(0, lambda: self.route_check_button.config(state=tk.NORMAL))
+            
+    def get_ors_route_distance(self, start_coords, end_coords):
+        """Uses OpenRouteService to get route distance (in km)."""
+        try:
+            headers = {
+                'Authorization': self.openrouteservice_api_key,
+                'Content-Type': 'application/json'
+            }
+            # Note: ORS expects [lon, lat] format
+            body = { "coordinates": [start_coords, end_coords] }
+            url = "https://api.openrouteservice.org/v2/directions/driving-car"
+            
+            response = requests.post(url, headers=headers, json=body)
+            response.raise_for_status()
+            data = response.json()
+            
+            # Extract distance (in meters) and convert to km
+            distance_km = data['routes'][0]['summary']['distance'] / 1000.0
+            return distance_km
+            
+        except Exception as e:
+            print(f"ORS Route Distance Error: {e}")
+            return None
+
+    # --- Find Nearby Chargers Functions ---
+
+    def start_find_chargers_check(self):
+        """Validates input and starts the charger search in a thread."""
+        location_name = self.find_loc_entry.get()
+        if not location_name:
+            self.find_status_var.set("Error: Location name is required.")
+            return
+
+        self.find_status_var.set(f"Finding chargers near {location_name}...")
+        self.find_chargers_button.config(state=tk.DISABLED)
+        # Clear previous results
+        for item in self.find_charger_treeview.get_children():
+            self.find_charger_treeview.delete(item)
+
+        threading.Thread(target=self.find_chargers_thread, 
+                         args=(location_name,), 
+                         daemon=True).start()
+
+    def find_chargers_thread(self, location_name):
+        """(Worker Thread) Fetches coordinates, then chargers, and updates UI."""
+        try:
+            # --- 1. Get Geocode for Location ---
+            self.root.after(0, self.find_status_var.set, f"Finding coordinates for {location_name}...")
+            coords = self.get_ors_coords(location_name)
+            
+            if not coords:
+                self.root.after(0, self.find_status_var.set, "Error: Could not find location. Be more specific.")
+                # --- FIX: Use lambda to correctly pass arguments to after() ---
+                self.root.after(0, lambda: self.find_chargers_button.config(state=tk.NORMAL))
+                return
+
+            # ORS gives [lon, lat], OCM needs (lat, lon)
+            lon, lat = coords[0], coords[1]
+            
+            # --- 2. Get Chargers from OpenChargeMap ---
+            self.root.after(0, self.find_status_var.set, "Finding chargers from OpenChargeMap...")
+            charger_list = self.get_ocm_chargers_by_coords(lat, lon)
+            
+            # --- ADDED: Send notification with charger list ---
+            alert_title_chg = f"Chargers Near {location_name}"
+            alert_message_chg = ""
+            if not charger_list:
+                alert_message_chg = f"No chargers found within 25km of {location_name}."
+            else:
+                alert_message_chg = f"Found {len(charger_list)} chargers. Top 5 nearby:\n"
+                # Sort by title to be consistent
+                charger_list.sort(key=lambda x: x.get('Title', ''))
+                for charger in charger_list[:5]: # Get first 5
+                    title = charger.get("Title", "Unknown")
+                    # --- MODIFIED: Add speed and availability to notification ---
+                    speed = charger.get("Speed", "--")
+                    available = charger.get("Available", "0 of 0")
+                    alert_message_chg += f"- {title} ({speed}kW, {available} free)\n"
+            
+            self.send_alert(alert_title_chg, alert_message_chg, topic=self.trip_notification_topic)
+            # --- End of notification ---
+
+            # --- 3. Update UI (on main thread) ---
+            self.root.after(0, self.update_nearby_chargers_list, charger_list)
+
+        except Exception as e:
+            self.root.after(0, self.find_status_var.set, f"An error occurred: {e}")
+            # --- FIX: Use lambda to correctly pass arguments to after() ---
+            self.root.after(0, lambda: self.find_chargers_button.config(state=tk.NORMAL))
+
+    def update_nearby_chargers_list(self, charger_list):
+        """(Main Thread) Updates the charger treeview with results."""
+        self.find_chargers_button.config(state=tk.NORMAL)
+        
+        # Clear old results
+        for item in self.find_charger_treeview.get_children():
+            self.find_charger_treeview.delete(item)
+            
+        if not charger_list:
+            self.find_status_var.set("No chargers found within 25km of that location.")
+            self.find_charger_treeview.insert("", tk.END, values=("No chargers found.", ""))
+            return
+
+        self.find_status_var.set(f"Found {len(charger_list)} chargers near {self.find_loc_entry.get()}.")
+        
+        charger_list.sort(key=lambda x: x.get('Title', ''))
+        for charger in charger_list:
+            title = charger.get("Title", "Unknown Charger")
+            address = charger.get("Address", "No address")
+            # --- ADDED: Get new data for the list ---
+            speed = charger.get("Speed", "--")
+            available = charger.get("Available", "--")
+            # --- MODIFIED: Insert all 4 values ---
+            self.find_charger_treeview.insert("", tk.END, values=(title, address, speed, available))
+
+    def get_ocm_chargers_by_coords(self, lat, lon):
+        """Uses OpenChargeMap to get chargers near a specific lat/lon."""
+        try:
+            base_url = "https://api.openchargemap.io/v3/poi/"
+            params = {
+                'key': self.openchargemap_api_key,
+                'output': 'json',
+                'latitude': lat,
+                'longitude': lon,
+                'distance': 25, # 25km radius
+                'distanceunit': 'km',
+                'maxresults': 50,
+                'includecomments': 'false',
+                'verbose': 'false'
+            }
+            
+            response = requests.get(base_url, params=params)
+            response.raise_for_status()
+            data = response.json()
+            
+            if data and isinstance(data, list):
+                chargers = []
+                for item in data:
+                    # --- ADDED: Generate Mock Data as requested ---
+                    # 3x 22kW, 1x 60kW, 1x 80kW -> 2/5 are fast
+                    speed_kw = random.choice([22, 22, 22, 60, 80]) 
+                    total_spots = random.randint(2, 8)
+                    available_spots = random.randint(0, total_spots)
+                    available_str = f"{available_spots} of {total_spots}"
+                    # --- End Mock Data ---
+
+                    chargers.append({
+                        "ID": item['ID'],
+                        "Title": item['AddressInfo']['Title'],
+                        "Address": f"{item['AddressInfo'].get('AddressLine1', '')}, {item['AddressInfo'].get('Town', '')}",
+                        # --- ADDED: New mock data fields ---
+                        "Speed": speed_kw,
+                        "Available": available_str
+                    })
+                return chargers
+            return []
+        except Exception as e:
+            print(f"OCM Error: {e}")
+            return []
+            
+    # --- Utility Geocoder ---
+    
+    def get_ors_coords(self, location_name):
+        """Uses OpenRouteService Geocode to get (lon, lat) from a name."""
+        try:
+            url = f"https://api.openrouteservice.org/geocode/search?api_key={self.openrouteservice_api_key}&text={urllib.parse.quote(location_name)}&size=1"
+            response = requests.get(url)
+            response.raise_for_status()
+            data = response.json()
+            # Returns [longitude, latitude]
+            return data['features'][0]['geometry']['coordinates']
+        except Exception:
+            return None
+            
+    # --- Simulation Core Functions ---
+
+    def setup_power_flow_diagram(self, parent):
+        self.canvas = tk.Canvas(parent, bg="#3B4252", highlightthickness=0)
+        self.canvas.pack(fill=tk.BOTH, expand=True)
+        self.animation_offset = 0
+        self.animation_speed = 10
+        self.root.after(100, self.draw_diagram_elements)
+
+    def draw_diagram_elements(self, event=None):
+        self.canvas.delete("all")
+        w, h = self.canvas.winfo_width(), self.canvas.winfo_height()
+        if w < 10 or h < 10: return
+
+        size = min(w, h) / 6
+        self.coords = {"grid": (w*0.15, h*0.5), "solar": (w*0.5, h*0.15), "house": (w*0.85, h*0.5), "ev": (w*0.5, h*0.85), "battery": (w*0.85, h*0.85)}
+
+        self.canvas.create_oval(self.coords["grid"][0]-size/2, self.coords["grid"][1]-size/2, self.coords["grid"][0]+size/2, self.coords["grid"][1]+size/2, fill="#BF616A", outline="white", width=2, tags="grid_icon")
+        self.canvas.create_text(self.coords["grid"][0], self.coords["grid"][1], text="GRID", font=("Helvetica", 16, "bold"), fill="white")
+        self.canvas.create_rectangle(self.coords["solar"][0]-size/2, self.coords["solar"][1]-size/2, self.coords["solar"][0]+size/2, self.coords["solar"][1]+size/2, fill="#EBCB8B", outline="white", width=2)
+        self.canvas.create_text(self.coords["solar"][0], self.coords["solar"][1], text="SOLAR", font=("Helvetica", 16, "bold"), fill="#2E3440")
+        self.canvas.create_rectangle(self.coords["house"][0]-size/2, self.coords["house"][1]-size/2, self.coords["house"][0]+size/2, self.coords["house"][1]+size/2, fill="#88C0D0", outline="white", width=2)
+        self.canvas.create_text(self.coords["house"][0], self.coords["house"][1], text="HOUSE", font=("Helvetica", 16, "bold"), fill="#2E3440")
+        
+        self.ev_oval = self.canvas.create_oval(self.coords["ev"][0]-size/2, self.coords["ev"][1]-size/2, self.coords["ev"][0]+size/2, self.coords["ev"][1]+size/2, fill=self.EV_ICON_COLOR, outline="white", width=2)
+        
+        self.canvas.create_text(self.coords["ev"][0], self.coords["ev"][1], text="EV", font=("Helvetica", 16, "bold"), fill="#2E3440")
+        self.canvas.create_rectangle(self.coords["battery"][0]-size/2, self.coords["battery"][1]-size/2, self.coords["battery"][0]+size/2, self.coords["battery"][1]+size/2, fill="#5E81AC", outline="white", width=2)
+        self.canvas.create_text(self.coords["battery"][0], self.coords["battery"][1], text="HOME\nBATT", font=("Helvetica", 12, "bold"), fill="white")
+
+        self.power_labels = {
+            "grid": self.canvas.create_text(self.coords["grid"][0], self.coords["grid"][1]+size/2+15, text="0.0 kW", font=("Helvetica", 10), fill="white"),
+            "solar": self.canvas.create_text(self.coords["solar"][0], self.coords["solar"][1]+size/2+15, text="0.0 kW", font=("Helvetica", 10), fill="white"),
+            "house": self.canvas.create_text(self.coords["house"][0], self.coords["house"][1]+size/2+15, text="0.0 kW", font=("Helvetica", 10), fill="white"),
+            "ev": self.canvas.create_text(self.coords["ev"][0], self.coords["ev"][1]+size/2+15, text="0.0 kW", font=("Helvetica", 10), fill="white"),
+            "battery": self.canvas.create_text(self.coords["battery"][0], self.coords["battery"][1]+size/2+15, text="0.0 kW", font=("Helvetica", 10), fill="white"),
+        }
+        self.ev_soc_label = self.canvas.create_text(self.coords["ev"][0], self.coords["ev"][1]-size/2-15, text="SOC: 0%", font=("Helvetica", 10), fill="white")
+        self.battery_soc_label = self.canvas.create_text(self.coords["battery"][0], self.coords["battery"][1]-size/2-15, text="SOC: 0%", font=("Helvetica", 10), fill="white")
+
+        self.animation_paths = {
+            "solar_house": [self.coords["solar"], self.coords["house"]], "solar_ev": [self.coords["solar"], self.coords["ev"]],
+            "solar_battery": [self.coords["solar"], self.coords["battery"]], "grid_house": [self.coords["grid"], self.coords["house"]],
+            "grid_ev": [self.coords["grid"], self.coords["ev"]], "ev_house": [self.coords["ev"], self.coords["house"]],
+            "ev_grid": [self.coords["ev"], self.coords["grid"]], "battery_house": [self.coords["battery"], self.coords["house"]],
+        }
+        self.animated_sparks = {}
+        
+    def setup_analytics_plots(self, parent):
+        self.fig, (self.ax_soc, self.ax_power_contrib, self.ax_grid) = plt.subplots(3, 1, figsize=(10, 8), sharex=True, facecolor="#ECEFF4")
+        self.fig.tight_layout(pad=2.0)
+        
+        self.ax_soc.set_title("Battery SOC (%)", fontsize=10); self.ax_soc.set_ylabel("SOC (%)")
+        self.ev_soc_line, = self.ax_soc.plot([], [], 'g-', linewidth=2, label="EV SOC")
+        self.home_battery_soc_line, = self.ax_soc.plot([], [], 'b--', linewidth=2, label="Home Battery SOC")
+        self.ax_soc.legend(fontsize='x-small')
+        
+        self.ax_power_contrib.set_title("Home Power Sources (kW)", fontsize=10); self.ax_power_contrib.set_ylabel("Power (kW)")
+        self.solar_contrib_line, = self.ax_power_contrib.plot([], [], color="darkorange", label='From Solar')
+        self.ev_contrib_line, = self.ax_power_contrib.plot([], [], color="darkgreen", label='From EV (V2H)')
+        self.grid_contrib_line, = self.ax_power_contrib.plot([], [], color="darkred", label='From Grid')
+        self.ax_power_contrib.legend(fontsize='x-small')
+
+        self.ax_grid.set_title("Grid Interaction (kW)", fontsize=10); self.ax_grid.set_ylabel("Power (kW)")
+        self.ax_grid.set_xlabel("Time (hour)")
+        self.grid_net_line, = self.ax_grid.plot([], [], 'purple', linewidth=2)
+        
+        for ax in [self.ax_soc, self.ax_power_contrib, self.ax_grid]:
+            ax.grid(True, linestyle='--'); ax.set_xlim(0, 24)
+        self.ax_soc.set_ylim(-5, 105)
+        self.ax_power_contrib.set_ylim(0, 10)
+        self.ax_power_contrib.set_yticks(np.arange(0, 11, 2))
+        
+        self.canvas_analytics = FigureCanvasTkAgg(self.fig, master=parent)
+        self.canvas_analytics.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+    def reset_simulation_state(self):
+        """Resets all simulation variables to their initial state."""
+        self.is_running = False; self.grid_is_down = False; self.time_step = 0
+        self.last_alert_mode = "" # Reset alert spam protector
+        
+        self.ev_soc, self.home_battery_soc = 80.0, 50.0
+        self.is_ev_plugged_in = True # Reset to plugged in
+        
+        self.total_cost, self.total_earnings = 0.0, 0.0
+        
+        self.plot_time, self.ev_soc_data, self.home_battery_soc_data = [], [], []
+        self.grid_net_data, self.solar_to_house_data, self.ev_to_house_data, self.grid_to_house_data = [], [], [], []
+        
+        self.ev_soc_line.set_data([], []); self.home_battery_soc_line.set_data([], []); self.grid_net_line.set_data([], [])
+        self.solar_contrib_line.set_data([], []); self.ev_contrib_line.set_data([], []); self.grid_contrib_line.set_data([], [])
+        self.canvas_analytics.draw()
+
+        self.draw_diagram_elements()
+        self.start_button.config(state="normal")
+        self.pause_button.config(state=tk.DISABLED)
+        self.resume_button.config(state=tk.DISABLED)
+        
+        self.grid_status_label.config(foreground="lightgreen"); self.grid_status_var.set("Grid: CONNECTED")
+        self.update_dashboard(0, "Ready")
+        self.update_min_range_label(self.min_range_slider.get())
+
+    def start_simulation(self):
+        if self.is_running: return
+        self.reset_simulation_state()
+        self.is_running = True
+        self.start_button.config(state=tk.DISABLED)
+        self.pause_button.config(state=tk.NORMAL)
+        self.resume_button.config(state=tk.DISABLED)
+        self.root.after(10, self.update_loop)
+
+    def pause_sim(self):
+        """Pauses the simulation."""
+        if not self.is_running: return
+        self.is_running = False
+        self.pause_button.config(state=tk.DISABLED)
+        self.resume_button.config(state=tk.NORMAL)
+
+    def resume_sim(self):
+        """Resumes the simulation."""
+        if self.is_running: return
+        self.is_running = True
+        self.pause_button.config(state=tk.NORMAL)
+        self.resume_button.config(state=tk.DISABLED)
+        self.update_loop() # Restart the loop
+
+    def simulate_grid_failure(self): 
+        if self.grid_is_down: return # Don't send alert if already down
+        self.grid_is_down = True
+        self.send_alert("GRID FAILURE", "Grid power is offline! Switching to battery/solar.")
+        self.last_alert_mode = "Grid Failure"
+
+    def restore_grid(self): 
+        self.grid_is_down = False
+        self.send_alert("GRID RESTORED", "Grid power is back online.")
+        self.last_alert_mode = "Grid Restored"
+        
+    def simulation_finished(self):
+        """Called when the simulation loop finishes."""
+        self.is_running = False
+        self.start_button.config(state="normal")
+        self.pause_button.config(state=tk.DISABLED)
+        self.resume_button.config(state=tk.DISABLED)
+        self.send_alert("Simulation Complete", f"24-hour day finished. Net Profit/Loss: ₹{self.total_earnings - self.total_cost:.2f}")
+
+
+    def update_loop(self):
+        if not self.is_running:
+            if self.time_step >= 24 * 60:
+                self.simulation_finished()
+            return
+        
+        if self.time_step >= 24 * 60:
+            self.simulation_finished()
+            return
+
+        total_seconds = self.time_step * 60
+        minute_of_day = self.time_step
+        hour = minute_of_day // 60
+        interval_h = 1 / 60.0
+        
+        solar_power = self.solar_profile[minute_of_day]
+        home_load = self.home_load_profile[minute_of_day]
+        
+        charger_mode = "Idle"
+        net_ev_power, net_home_battery_power, grid_power = 0, 0, 0
+        flows = {k: 0 for k in self.animation_paths.keys()}
+        
+        power_needed_by_house = home_load
+        from_solar = min(power_needed_by_house, solar_power)
+        flows["solar_house"] = from_solar
+        power_needed_by_house -= from_solar
+        
+        if power_needed_by_house > 0 and self.home_battery_soc > 1:
+            from_batt = min(power_needed_by_house, self.home_battery_capacity_kwh * 0.5)
+            net_home_battery_power = -from_batt
+            flows["battery_house"] = from_batt
+            power_needed_by_house -= from_batt
+        
+        required_range_km = self.min_range_slider.get() + self.fixed_buffer_km
+        required_soc = (required_range_km / self.ev_max_range_km) * 100
+        
+        # --- MODIFIED: Simulation logic now respects plug state ---
+        
+        # 1. Driving logic overrides all plug states
+        if 8 <= hour < 9:
+            commute_kwh_per_hour = (30 / self.ev_max_range_km) * self.ev_capacity_kwh # 30km = 6%
+            net_ev_power = -commute_kwh_per_hour
+            charger_mode = "Driving (Commute)"
+            self.is_ev_plugged_in = False # Force unplug
+        
+        elif 17 <= hour < 18:
+            commute_kwh_per_hour = (30 / self.ev_max_range_km) * self.ev_capacity_kwh # 30km = 6%
+            net_ev_power = -commute_kwh_per_hour
+            charger_mode = "Driving (Home)"
+            self.is_ev_plugged_in = False # Force unplug
+            
+        # 2. Arriving home, default to plugged in (user can override)
+        elif hour == 18 and minute_of_day == 18*60:
+            self.is_ev_plugged_in = True 
+            charger_mode = "Plugged In (Idle)"
+        
+        # 3. At office (not at home, so plug state doesn't matter)
+        elif 11 <= hour < 17 and not self.grid_is_down:
+            self.is_ev_plugged_in = False # Not plugged in *at home*
+            if self.ev_soc > required_soc + 1:
+                charger_mode = "V2G @ Office" # Set mode first
+                surplus_soc = self.ev_soc - required_soc
+                surplus_kwh = (surplus_soc / 100) * self.ev_capacity_kwh
+                max_discharge_power_for_interval = surplus_kwh / interval_h
+                discharge_power = min(self.v2g_rate_kw, max_discharge_power_for_interval)
+                net_ev_power = -discharge_power
+                flows["ev_grid"] = discharge_power
+                grid_power -= discharge_power
+        
+        # 4. At home, and user has EV plugged in
+        elif self.is_ev_plugged_in:
+            if self.grid_is_down:
+                is_total_blackout = self.home_battery_soc <= 1 and solar_power < 0.1
+                if is_total_blackout:
+                    if self.ev_soc > required_soc and power_needed_by_house > 0:
+                        charger_mode = "EMERGENCY V2H"
+                        surplus_soc = self.ev_soc - required_soc
+                        surplus_kwh = (surplus_soc / 100) * self.ev_capacity_kwh
+                        max_discharge_power_for_interval = surplus_kwh / interval_h
+                        from_ev = min(power_needed_by_house, self.v2g_rate_kw, max_discharge_power_for_interval)
+                        
+                        net_ev_power = -from_ev
+                        flows["ev_house"] = from_ev
+                        power_needed_by_house -= from_ev
+                    
+                    if power_needed_by_house > 0:
+                        charger_mode = "BLACKOUT"
+                else:
+                    charger_mode = "Grid Down (Batt OK)"
+            
+            else: # Grid is ON
+                if power_needed_by_house > 0:
+                    grid_power += power_needed_by_house
+                    flows["grid_house"] = power_needed_by_house
+                
+                # Night Charging
+                if 21 <= hour or hour < 5:
+                    if self.ev_soc < 100:
+                        net_ev_power = self.charge_rate_kw
+                        charger_mode = "Night Charging"
+                        flows["grid_ev"] = self.charge_rate_kw
+                        grid_power += self.charge_rate_kw
+                
+            # Solar Charging (can happen anytime if grid is up or down)
+            surplus_solar = solar_power - flows["solar_house"]
+            if surplus_solar > 0:
+                if self.home_battery_soc < 100:
+                    to_batt = min(surplus_solar, self.home_battery_capacity_kwh * 0.5)
+                    net_home_battery_power += to_batt
+                    flows["solar_battery"] = to_batt
+                    surplus_solar -= to_batt
+                if surplus_solar > 0:
+                    to_ev = min(surplus_solar, self.charge_rate_kw)
+                    net_ev_power += to_ev
+                    flows["solar_ev"] = to_ev
+                    charger_mode = "Solar Charging"
+
+        # 5. At home, but user has EV unplugged
+        else:
+            charger_mode = "Idle (Unplugged)"
+            net_ev_power = 0
+            if not self.grid_is_down and power_needed_by_house > 0:
+                grid_power += power_needed_by_house
+                flows["grid_house"] = power_needed_by_house
+            # Handle solar when EV is unplugged
+            surplus_solar = solar_power - flows["solar_house"]
+            if surplus_solar > 0:
+                if self.home_battery_soc < 100:
+                    to_batt = min(surplus_solar, self.home_battery_capacity_kwh * 0.5)
+                    net_home_battery_power += to_batt
+                    flows["solar_battery"] = to_batt
+                    surplus_solar -= to_batt
+                # Any remaining solar is just "lost" or "exported" (not tracked)
+
+        # --- End of MODIFIED logic ---
+
+        # --- Phone Alerting Logic (All Modes) ---
+        if charger_mode != self.last_alert_mode:
+            alert_title = f"EV Hub: {charger_mode}"
+            alert_message = ""
+
+            if "Driving" in charger_mode:
+                alert_message = f"EV is now driving. SOC is {self.ev_soc:.1f}%."
+            elif "Charging" in charger_mode:
+                alert_message = f"EV started charging. SOC is {self.ev_soc:.1f}%."
+            elif "V2G" in charger_mode:
+                alert_message = f"Selling power to grid. SOC is {self.ev_soc:.1f}%."
+            elif "V2H" in charger_mode:
+                alert_title = "⚠️ EMERGENCY V2H ⚠️"
+                alert_message = f"Powering house from EV! SOC is {self.ev_soc:.1f}%."
+                print("DEBUG: V2H Alert Triggered. Sending notification...")
+            elif "BLACKOUT" in charger_mode:
+                alert_title = "🚨 POWER BLACKOUT 🚨"
+                alert_message = "Grid is down and home battery is empty. House is offline."
+            elif "Idle" in charger_mode:
+                alert_message = f"EV is {charger_mode}. SOC is {self.ev_soc:.1f}%."
+            
+            if alert_message: # Only send if we have a custom message
+                self.send_alert(alert_title, alert_message)
+            
+            self.last_alert_mode = charger_mode
+            
+        # --- End of Alerting Logic ---
+
+        self.ev_soc = np.clip(self.ev_soc + (net_ev_power * interval_h / self.ev_capacity_kwh) * 100, 0, 100)
+        self.home_battery_soc = np.clip(self.home_battery_soc + (net_home_battery_power * interval_h / self.home_battery_capacity_kwh) * 100, 0, 100)
+        
+        if grid_power > 0: self.total_cost += grid_power * interval_h * self.residential_rate
+        elif grid_power < 0: self.total_earnings += abs(grid_power) * interval_h * self.commercial_rate
+
+        self.update_dashboard(total_seconds, charger_mode)
+        self.update_power_flow_diagram(grid_power, solar_power, home_load, net_ev_power, net_home_battery_power, flows)
+        
+        current_time_hours = total_seconds / 3600.0
+        self.plot_time.append(current_time_hours); self.ev_soc_data.append(self.ev_soc); self.home_battery_soc_data.append(self.home_battery_soc); self.grid_net_data.append(grid_power)
+        self.solar_to_house_data.append(flows["solar_house"]); self.ev_to_house_data.append(flows["ev_house"]); self.grid_to_house_data.append(flows["grid_house"])
+        self.update_analytics_plots()
+
+        self.time_step += 1
+        self.root.after(111, self.update_loop)
+
+    def update_dashboard(self, total_seconds, mode):
+        # --- BUG FIX: Changed div_mod to divmod ---
+        hour, minute = divmod(int(total_seconds / 60), 60)
+        
+        self.time_var.set(f"{hour:02}:{minute:02}")
+        self.mode_var.set(f"Mode: {mode}")
+        self.soc_text_var.set(f"EV SOC: {self.ev_soc:.1f}%")
+        self.range_text_var.set(f"Range: {self.ev_soc / 100 * self.ev_max_range_km:.1f} km")
+        self.soc_progress['value'] = self.ev_soc
+        self.grid_status_var.set("Grid: OFFLINE" if self.grid_is_down else "Grid: CONNECTED")
+        self.grid_status_label.config(foreground="#BF616A" if self.grid_is_down else "lightgreen")
+        
+        net_profit = (self.total_earnings) - self.total_cost
+        self.net_var.set(f"Net {'Profit' if net_profit >= 0 else 'Loss'}: ₹{abs(net_profit):.2f}")
+        
+        if "BLACKOUT" in mode: self.mode_label.config(foreground="red")
+        elif "V2H" in mode or "Support" in mode: self.mode_label.config(foreground="orange")
+        elif "Driving" in mode: self.mode_label.config(foreground="#EBCB8B")
+        else:
+            self.mode_label.config(foreground="#5294E2") # Bright blue
+            
+        # --- NEW: Update Plug Status Label Color ---
+        if self.is_ev_plugged_in:
+            self.plug_status_var.set("EV: Plugged In")
+            self.plug_status_label.config(foreground="lightgreen")
+        else:
+            self.plug_status_var.set("EV: Unplugged")
+            self.plug_status_label.config(foreground="#BF616A") # Red
+
+        # --- NEW: Throttled Status Notification ---
+        current_time = time.time()
+        if self.is_running and (current_time - self.last_status_send_time > 10): # Send every 10 seconds, only if sim is running
+            self.last_status_send_time = current_time
+            range_km = self.ev_soc / 100 * self.ev_max_range_km
+            status_message = f"SOC: {self.ev_soc:.1f}% | Range: {range_km:.1f} km | Mode: {mode}"
+            # Send to the *status* topic
+            self.send_alert("EV Status", status_message, topic=self.status_notification_topic)
+
+    def update_power_flow_diagram(self, grid, solar, house, ev, battery, flows):
+        if not hasattr(self, 'coords'): return
+        self.canvas.itemconfig(self.power_labels["grid"], text=f"{abs(grid):.1f} kW")
+        self.canvas.itemconfig(self.power_labels["solar"], text=f"{solar:.1f} kW")
+        self.canvas.itemconfig(self.power_labels["house"], text=f"{house:.1f} kW")
+        self.canvas.itemconfig(self.power_labels["ev"], text=f"{abs(ev):.1f} kW")
+        self.canvas.itemconfig(self.power_labels["battery"], text=f"{abs(battery):.1f} kW")
+        self.canvas.itemconfig(self.ev_soc_label, text=f"SOC: {self.ev_soc:.1f}%")
+        self.canvas.itemconfig(self.battery_soc_label, text=f"SOC: {self.home_battery_soc:.1f}%")
+        self.canvas.itemconfig("grid_icon", fill="#5e636e" if self.grid_is_down else "#BF616A")
+        
+        for key, spark_list in self.animated_sparks.items():
+            for spark_id in spark_list: self.canvas.delete(spark_id)
+        self.animated_sparks.clear()
+        
+        colors = {"solar_house": "gold", "solar_ev": "gold", "solar_battery": "gold",
+                  "grid_house": "#e60000", "grid_ev": "#e60000",
+                  "ev_house": "lightblue", "ev_grid": "lightgreen", "battery_house": "cyan"}
+        
+        self.animation_offset = (self.animation_offset + self.animation_speed) % 100
+        
+        for key, power in flows.items():
+            if power > 0.1 and key in self.animation_paths:
+                path = self.animation_paths[key]
+                dx, dy = path[1][0] - path[0][0], path[1][1] - path[0][1]
+                num_sparks = max(1, int(power / 2))
+                
+                sparks = []
+                for i in range(num_sparks):
+                    pos = (self.animation_offset + i * (100 // num_sparks)) % 100 / 100.0
+                    x, y = path[0][0] + dx * pos, path[0][1] + dy * pos
+                    spark_id = self.canvas.create_oval(x-4, y-4, x+4, y+4, fill=colors.get(key, "white"), outline="")
+                    sparks.append(spark_id)
+                self.animated_sparks[key] = sparks
+        
+        # --- MODIFIED: Outline reflects plug state ---
+        if not self.is_ev_plugged_in:
+            self.canvas.itemconfig(self.ev_oval, outline="grey", width=2) # Grey if unplugged
+        elif ev > 0.1: 
+            self.canvas.itemconfig(self.ev_oval, outline="gold", width=4) # Charging
+        elif ev < -0.1: 
+            self.canvas.itemconfig(self.ev_oval, outline="red", width=4) # Discharging
+        else: 
+            self.canvas.itemconfig(self.ev_oval, outline="white", width=2) # Plugged in, idle
+            
+        self.canvas.update()
+
+    def update_analytics_plots(self):
+        self.ev_soc_line.set_data(self.plot_time, self.ev_soc_data)
+        self.home_battery_soc_line.set_data(self.plot_time, self.home_battery_soc_data)
+        self.grid_net_line.set_data(self.plot_time, self.grid_net_data)
+        
+        self.solar_contrib_line.set_data(self.plot_time, self.solar_to_house_data)
+        self.ev_contrib_line.set_data(self.plot_time, self.ev_to_house_data)
+        self.grid_contrib_line.set_data(self.plot_time, self.grid_to_house_data)
+
+        for ax in self.fig.axes:
+            ax.relim()
+            ax.autoscale_view()
+        self.ax_soc.set_ylim(-5, 105)
+        self.ax_power_contrib.set_ylim(bottom=0, top=10)
+        
+        self.fig.canvas.draw_idle()
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = UltimateEVHubApp(root)
+    root.mainloop()
