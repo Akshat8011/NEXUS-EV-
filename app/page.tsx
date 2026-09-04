@@ -98,19 +98,23 @@ export default function Dashboard() {
         </LabelFrame>
 
         <LabelFrame title="Weather (Lucknow)">
-          {weather?.current ? (
+          {weather?.current?.weather ? (
             <div className="text-center">
               <div className="font-bold text-lg">{weather.current.weather[0].main}</div>
               <div className="text-sm">{weather.current.main.temp.toFixed(1)}°C</div>
               <div className="text-xs">Vis: {(weather.current.visibility/1000).toFixed(1)} km</div>
               <div className="text-xs">UV Index: 2 (Est.)</div>
-              {weather.air_pollution && (
+              {weather.air_pollution?.list?.[0]?.components && (
                 <div className="text-xs font-bold mt-1 text-[#A3BE8C]">
                   PM2.5: {weather.air_pollution.list[0].components.pm2_5.toFixed(1)} µg/m³
                 </div>
               )}
             </div>
-          ) : <div className="text-center text-sm">Loading...</div>}
+          ) : weather?.error || weather?.current?.cod ? (
+            <div className="text-center text-sm text-red-400">Weather API Error</div>
+          ) : (
+            <div className="text-center text-sm">Loading...</div>
+          )}
           <TkButton disabled className="mt-2 text-xs">Show 5-Day Forecast</TkButton>
         </LabelFrame>
 
