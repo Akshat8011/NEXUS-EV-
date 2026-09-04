@@ -1,0 +1,47 @@
+@import "tailwindcss";
+
+@theme {
+  --color-root: #2E3440;
+  --color-frame: #3B4252;
+  --color-accent: #88C0D0;
+  --color-ev: #A3BE8C;
+  --color-input: #4C566A;
+  --color-gridDown: #BF616A;
+  --color-solar: #EBCB8B;
+  --color-battery: #5E81AC;
+  --color-disabled: #4C566A;
+  --color-disabledText: #616E88;
+  --color-chartGrid: #ECEFF4;
+}
+
+body {
+  background: var(--color-root);
+  color: #ffffff;
+  font-family: Arial, Helvetica, sans-serif;
+  height: 100%;
+}
+
+@keyframes flow {
+  to {
+    stroke-dashoffset: -20;
+  }
+}
+
+.animate-flow {
+  animation: flow 1s linear infinite;
+}
+
+/* Custom Scrollbar for Left Panel */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 10px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: #3B4252;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #4C566A;
+  border: 1px solid #3B4252;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #88C0D0;
+}
