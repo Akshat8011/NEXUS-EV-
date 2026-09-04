@@ -186,9 +186,7 @@ export default function Dashboard() {
           <ChartWrapper title="Grid Interaction (kW)" yLabel="Power (kW)" xLabel="Time (hour)">
             <LineChart data={sim.history} margin={{ top: 10, right: 10, left: 0, bottom: 15 }}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} />
-              <XAxis dataKey="time" type="number" domain={[0, 24]} ticks={[0,5,10,15,20]} >
-                <label position="bottom" style={{textAnchor: "middle"}} fontSize={12}>Time (hour)</label>
-              </XAxis>
+              <XAxis dataKey="time" type="number" domain={[0, 24]} ticks={[0,5,10,15,20]} />
               <YAxis domain={[-5, 5]} ticks={[-4, -2, 0, 2, 4]} />
               <Tooltip />
               <Line type="stepAfter" dataKey="gridNet" stroke="purple" name="Grid Net (kW)" dot={false} strokeWidth={1.5} isAnimationActive={false}/>
@@ -210,6 +208,7 @@ function ChartWrapper({ title, yLabel, children, xLabel }: { title: string, yLab
     <div className="h-1/3 w-full bg-white text-black relative border border-gray-400 flex flex-col">
       <div className="text-center text-xs font-bold pt-1">{title}</div>
       <div className="absolute left-[-10px] top-1/2 -rotate-90 text-[10px] origin-center -translate-y-1/2 -translate-x-1/2">{yLabel}</div>
+      {xLabel && <div className="absolute bottom-1 left-1/2 -translate-x-1/2 text-[10px] z-10">{xLabel}</div>}
       <div className="flex-1 pb-1 pr-1 pl-4">
         <ResponsiveContainer width="100%" height="100%">
           {children}
