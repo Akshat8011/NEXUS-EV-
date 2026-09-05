@@ -56,7 +56,11 @@ export default function Dashboard() {
   };
 
   const sim = useSimulation(simParams);
-  const { state: degradation, habits, habitAnalytics, recordChargeCycle, recordHabit } = useDegradation();
+  const { state: degradation, habits, habitAnalytics, recordChargeCycle, recordHabit } = useDegradation(
+    selectedEV.batteryKwh,
+    selectedEV.degradationFactor,
+    selectedEV.id
+  );
 
   const [activeTab, setActiveTab] = useState<Tab>('Dashboard');
   const [weather, setWeather] = useState<any>(null);
@@ -91,21 +95,24 @@ export default function Dashboard() {
   const forecastClouds = weather?.forecast?.list?.slice(0,8).map((f: any) => f.clouds.all) ?? [];
   const forecastDescs  = weather?.forecast?.list?.slice(0,8).map((f: any) => f.weather[0].description) ?? [];
 
-  // Debounced MADDPG — runs 800ms after last change to prevent rapid rerenders
+  // Debounced MADDPG — now passes ALL model-specific params
   useEffect(() => {
     if (maddpgTimerRef.current) clearTimeout(maddpgTimerRef.current);
     maddpgTimerRef.current = setTimeout(() => {
       const schedule = runMADDPG({
-        currentEvSoc:   sim.evSoc,
-        minRangeKm:     sim.minRangeKm,
-        evMaxRangeKm:   sim.evMaxRangeKm,
-        evCapacityKwh:  sim.evCapacityKwh,
+        currentEvSoc:        sim.evSoc,
+        minRangeKm:          sim.minRangeKm,
+        evMaxRangeKm:        sim.evMaxRangeKm,
+        evCapacityKwh:       sim.evCapacityKwh,
+        chargeRateKw:        selectedEV.chargeRateKw,           // ← model-specific AC charge rate
+        v2gRateKw:           selectedEV.v2gCapable ? 6.0 : 0,  // ← 0 if no V2G
+        consumptionWhPerKm:  selectedEV.consumptionWhPerKm,    // ← model-specific consumption
         weatherTemp, cloudCoverPct: cloudCover,
         forecastTemps, forecastClouds,
         gridIsDown: sim.gridIsDown,
         outages,
-        batterySoh: degradation.soh,
-        homeBatterySoc: sim.homeBatterySoc,
+        batterySoh:          degradation.soh,
+        homeBatterySoc:      sim.homeBatterySoc,
       });
       setMaddpgSchedule(schedule);
     }, 800);
@@ -132,21 +139,30 @@ export default function Dashboard() {
     return () => { if (plannerTimerRef.current) clearTimeout(plannerTimerRef.current); };
   }, [maddpgSchedule, weather?.cityName, weatherTemp, cloudCover]);
 
-  // Record habit when sim day completes
+  // Record habit when sim day completes — use EV-specific costs only
   const prevDay = useRef(1);
   useEffect(() => {
     if (sim.dayNumber > prevDay.current && sim.dayNumber > 1) {
-      recordChargeCycle(80, sim.evSoc, weatherTemp, 1);
+      // EV charging energy cost = consumption × 30km commute × ₹/kWh
+      // This is the realistic EV-only cost, not the whole house electricity bill
+      const dailyKm = 60; // two commutes of 30km each
+      const evGridKwh = (selectedEV.consumptionWhPerKm * dailyKm) / 1000;
+      const evChargingCostRs = evGridKwh * 7.5; // residential rate ₹/kWh
+      const solarChargeKwh  = evGridKwh * 0.3;  // ~30% solar contribution
+
+      recordChargeCycle(20, sim.evSoc, weatherTemp, 1);
       recordHabit({
         date: new Date().toISOString(),
-        chargingStartSoc: 80,
-        chargingEndSoc: sim.evSoc,
-        estimatedKm: 60,
-        temp: weatherTemp,
-        v2gSessionCount: maddpgSchedule?.v2gSessions ?? 0,
-        peakSoc: 100,
-        costRs: sim.totalCost,
-        earningsRs: sim.totalEarnings,
+        chargingStartSoc:  20,
+        chargingEndSoc:    sim.evSoc,
+        estimatedKm:       dailyKm,
+        temp:              weatherTemp,
+        v2gSessionCount:   maddpgSchedule?.v2gSessions ?? 0,
+        peakSoc:           100,
+        evChargingCostRs,
+        v2gEarningsRs:     sim.totalEarnings,
+        solarChargingKwh:  solarChargeKwh,
+        gridChargingKwh:   Math.max(0, evGridKwh - solarChargeKwh),
       });
       prevDay.current = sim.dayNumber;
     }
@@ -436,6 +452,13 @@ export default function Dashboard() {
             maddpgSchedule={maddpgSchedule}
             weatherTemp={weatherTemp}
             selectedEV={selectedEV}
+            simTotals={{
+              totalGridCostRs:  sim.cumulativeCost,
+              totalV2GEarnRs:   sim.cumulativeEarnings,
+              totalSolarKwh:    maddpgSchedule?.solarEnergyKwh ?? 0,
+              totalV2HKwh:      0,
+              cumulativeDays:   sim.dayNumber,
+            }}
           />
         )}
         {activeTab === 'Daily Planner' && (
