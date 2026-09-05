@@ -1,7 +1,7 @@
 "use client";
 import React, { useEffect, useState } from 'react';
 import { useSimulation } from '../hooks/useSimulation';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Text } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import clsx from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -34,11 +34,29 @@ const TkButton = ({ children, onClick, disabled, className }: any) => (
 
 export default function Dashboard() {
   const sim = useSimulation();
-  const [weather, setWeather] = useState<any>(null);
-  const [isTripModalOpen, setIsTripModalOpen] = useState(false);
   
+  const [weather, setWeather] = useState<any>(null);
+  const [cityInput, setCityInput] = useState("");
+  const [isFetchingWeather, setIsFetchingWeather] = useState(false);
+  
+  const [isTripModalOpen, setIsTripModalOpen] = useState(false);
+  const [isForecastModalOpen, setIsForecastModalOpen] = useState(false);
+  
+  const fetchWeather = async (city?: string) => {
+    setIsFetchingWeather(true);
+    try {
+      const url = city ? `/api/weather?city=${encodeURIComponent(city)}` : '/api/weather';
+      const r = await fetch(url);
+      const data = await r.json();
+      setWeather(data);
+    } catch (e) {
+      console.error(e);
+    }
+    setIsFetchingWeather(false);
+  };
+
   useEffect(() => {
-    fetch('/api/weather').then(r => r.json()).then(data => setWeather(data)).catch(console.error);
+    fetchWeather("Lucknow");
   }, []);
 
   const formatTime = (mins: number) => {
@@ -48,9 +66,9 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="flex h-screen bg-root text-white overflow-hidden p-2 gap-2">
+    <div className="flex flex-col lg:flex-row min-h-screen lg:h-screen bg-root text-white p-2 gap-2 overflow-x-hidden">
       {/* LEFT PANEL: Controls */}
-      <div className="w-[320px] bg-root flex flex-col overflow-y-auto shrink-0 pr-2 custom-scrollbar">
+      <div className="w-full lg:w-[320px] bg-root flex flex-col shrink-0 custom-scrollbar lg:overflow-y-auto lg:pr-2">
         
         <LabelFrame title="Simulation Control">
           <TkButton 
@@ -61,45 +79,60 @@ export default function Dashboard() {
             Start 24-Hour Day
           </TkButton>
           <div className="flex gap-2">
-            <TkButton 
-              onClick={sim.pauseSim}
-              disabled={!sim.isRunning}
-            >
+            <TkButton onClick={sim.pauseSim} disabled={!sim.isRunning}>
               Pause Simulation
             </TkButton>
-            <TkButton 
-              onClick={() => sim.startSim()}
-              disabled={sim.isRunning || sim.timeStep===0}
-            >
+            <TkButton onClick={() => sim.startSim()} disabled={sim.isRunning || sim.timeStep===0}>
               Resume Simulation
             </TkButton>
           </div>
         </LabelFrame>
 
         <LabelFrame title="System Status">
-          <div className="text-xs mb-1">Current Time:</div>
-          <div className="text-xl font-bold mb-2">{formatTime(sim.timeStep)}</div>
+          <div className="flex justify-between items-end mb-2">
+             <div>
+               <div className="text-xs mb-1">Current Time:</div>
+               <div className="text-xl font-bold">{formatTime(sim.timeStep)}</div>
+             </div>
+             <div className={cn("font-bold text-sm", sim.isEvPluggedIn ? "text-[#A3BE8C]" : "text-[#BF616A]")}>
+               EV: {sim.isEvPluggedIn ? "Plugged In" : "Unplugged"}
+             </div>
+          </div>
           
           <div className="w-full bg-root h-4 overflow-hidden mb-1 border border-gray-500">
             <div className="bg-accent h-full" style={{ width: `${sim.evSoc}%` }} />
           </div>
-          <div className="font-bold text-sm mb-1">EV SOC: {sim.evSoc.toFixed(1)}%</div>
-          <div className="text-xs mb-3">Range: {((sim.evSoc/100)*sim.evMaxRangeKm).toFixed(1)} km</div>
+          <div className="flex justify-between items-center mb-3">
+             <div className="font-bold text-sm">EV SOC: {sim.evSoc.toFixed(1)}%</div>
+             <div className="text-xs">Range: {((sim.evSoc/100)*sim.evMaxRangeKm).toFixed(1)} km</div>
+          </div>
           
           <div className={cn("font-bold text-lg", 
             sim.mode.includes("BLACKOUT") ? "text-red-500" :
             sim.mode.includes("V2H") ? "text-orange-500" :
             sim.mode.includes("Driving") ? "text-[#EBCB8B]" : "text-[#5294E2]"
           )}>Mode: {sim.mode}</div>
-
-          <div className={cn("font-bold text-sm mt-1", sim.isEvPluggedIn ? "text-[#A3BE8C]" : "text-[#BF616A]")}>
-            EV: {sim.isEvPluggedIn ? "Plugged In" : "Unplugged"}
-          </div>
         </LabelFrame>
 
-        <LabelFrame title="Weather (Lucknow)">
+        <LabelFrame title={`Weather (${weather?.cityName || "Lucknow"})`}>
+          <div className="flex gap-2 mb-3">
+             <input 
+               value={cityInput}
+               onChange={(e) => setCityInput(e.target.value)}
+               placeholder="Search city..."
+               className="flex-1 bg-input px-2 py-1 text-sm rounded outline-none"
+             />
+             <TkButton 
+               className="w-auto px-4" 
+               disabled={isFetchingWeather || !cityInput}
+               onClick={() => fetchWeather(cityInput)}
+             >
+               Search
+             </TkButton>
+          </div>
+
           {weather?.current?.weather ? (
-            <div className="text-center">
+            <div className="text-center mb-2">
               <div className="font-bold text-lg">{weather.current.weather[0].main}</div>
               <div className="text-sm">{weather.current.main.temp.toFixed(1)}°C</div>
               <div className="text-xs">Vis: {(weather.current.visibility/1000).toFixed(1)} km</div>
@@ -111,11 +144,18 @@ export default function Dashboard() {
               )}
             </div>
           ) : weather?.error || weather?.current?.cod ? (
-            <div className="text-center text-sm text-red-400">Weather API Error</div>
+            <div className="text-center text-sm text-red-400 mb-2">Weather API Error</div>
           ) : (
-            <div className="text-center text-sm">Loading...</div>
+            <div className="text-center text-sm mb-2">Loading...</div>
           )}
-          <TkButton disabled className="mt-2 text-xs">Show 5-Day Forecast</TkButton>
+          
+          <TkButton 
+            disabled={!weather?.forecast} 
+            className="mt-2 text-xs"
+            onClick={() => setIsForecastModalOpen(true)}
+          >
+            Show 5-Day Forecast
+          </TkButton>
         </LabelFrame>
 
         <LabelFrame title="User Settings">
@@ -133,12 +173,10 @@ export default function Dashboard() {
           <div className={cn("font-bold text-center mb-2", sim.gridIsDown ? "text-[#BF616A]" : "text-[#A3BE8C]")}>
             Grid: {sim.gridIsDown ? "OFFLINE" : "CONNECTED"}
           </div>
-          <TkButton onClick={() => sim.setGridIsDown(true)} className="mb-2">
-            Simulate Grid Failure
-          </TkButton>
-          <TkButton onClick={() => sim.setGridIsDown(false)}>
-            Restore Grid Power
-          </TkButton>
+          <div className="flex gap-2">
+            <TkButton onClick={() => sim.setGridIsDown(true)}>Simulate Grid Failure</TkButton>
+            <TkButton onClick={() => sim.setGridIsDown(false)}>Restore Grid Power</TkButton>
+          </div>
         </LabelFrame>
 
         <LabelFrame title="EV Trip">
@@ -152,16 +190,16 @@ export default function Dashboard() {
         </LabelFrame>
       </div>
 
-      {/* RIGHT PANEL: Diagram + Charts side-by-side like Tkinter PanedWindow */}
-      <div className="flex-1 flex flex-row gap-2 bg-frame overflow-hidden p-2 rounded">
-        {/* SVG DIAGRAM (Left pane) */}
-        <div className="w-[45%] h-full relative border-r-2 border-root pr-2">
+      {/* RIGHT PANEL: Diagram + Charts */}
+      <div className="flex-1 flex flex-col md:flex-row gap-2 bg-frame p-2 rounded lg:overflow-hidden min-h-[600px] lg:min-h-0">
+        
+        {/* SVG DIAGRAM (Left pane on Desktop, Top on Mobile) */}
+        <div className="w-full md:w-[45%] h-[300px] md:h-full relative border-b-2 md:border-b-0 md:border-r-2 border-root pb-2 md:pb-0 md:pr-2 shrink-0">
           <PowerFlowDiagram sim={sim} />
         </div>
 
-        {/* CHARTS (Right pane) */}
-        <div className="w-[55%] h-full flex flex-col gap-2 pl-2">
-          
+        {/* CHARTS (Right pane on Desktop, Bottom on Mobile) */}
+        <div className="w-full md:w-[55%] flex flex-col gap-2 md:pl-2 h-[600px] md:h-full">
           <ChartWrapper title="Battery SOC (%)" yLabel="SOC (%)">
             <LineChart data={sim.history} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} />
@@ -196,12 +234,14 @@ export default function Dashboard() {
               <Line type="stepAfter" dataKey="gridNet" stroke="purple" name="Grid Net (kW)" dot={false} strokeWidth={1.5} isAnimationActive={false}/>
             </LineChart>
           </ChartWrapper>
-
         </div>
       </div>
 
-      {/* EV Trip Modal */}
+      {/* Modals */}
       {isTripModalOpen && <EVTripModal onClose={() => setIsTripModalOpen(false)} evSoc={sim.evSoc} evMaxRange={sim.evMaxRangeKm} />}
+      {isForecastModalOpen && weather?.forecast && (
+        <ForecastModal onClose={() => setIsForecastModalOpen(false)} forecast={weather.forecast} city={weather.cityName} />
+      )}
     </div>
   );
 }
@@ -209,7 +249,7 @@ export default function Dashboard() {
 // Wrapper for Recharts to look like Matplotlib
 function ChartWrapper({ title, yLabel, children, xLabel }: { title: string, yLabel: string, children: React.ReactNode, xLabel?: string }) {
   return (
-    <div className="h-1/3 w-full bg-white text-black relative border border-gray-400 flex flex-col">
+    <div className="h-1/3 min-h-[180px] md:min-h-0 w-full bg-white text-black relative border border-gray-400 flex flex-col">
       <div className="text-center text-xs font-bold pt-1">{title}</div>
       <div className="absolute left-[-10px] top-1/2 -rotate-90 text-[10px] origin-center -translate-y-1/2 -translate-x-1/2">{yLabel}</div>
       {xLabel && <div className="absolute bottom-1 left-1/2 -translate-x-1/2 text-[10px] z-10">{xLabel}</div>}
@@ -221,6 +261,48 @@ function ChartWrapper({ title, yLabel, children, xLabel }: { title: string, yLab
     </div>
   );
 }
+
+// 5-Day Forecast Modal
+function ForecastModal({ onClose, forecast, city }: { onClose: () => void, forecast: any, city: string }) {
+  // Extract daily forecasts (aiming for around 12:00 PM)
+  const dailyForecasts = forecast.list.filter((item: any) => item.dt_txt.includes("12:00:00"));
+  
+  // Fallback if 12:00 PM data doesn't exist for some reason
+  let displayForecasts = dailyForecasts;
+  if (displayForecasts.length === 0) {
+     const uniqueDays: any = {};
+     forecast.list.forEach((item: any) => {
+        const day = item.dt_txt.split(' ')[0];
+        if (!uniqueDays[day]) uniqueDays[day] = item;
+     });
+     displayForecasts = Object.values(uniqueDays).slice(1, 6); // next 5 days
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 p-4">
+      <div className="bg-frame w-full max-w-[350px] rounded shadow-lg border border-accent p-4 relative">
+        <button className="absolute top-2 right-2 text-white font-bold p-2 leading-none" onClick={onClose}>X</button>
+        <h2 className="text-lg font-bold text-white mb-4 text-center">5-Day Forecast ({city})</h2>
+        
+        <div className="flex flex-col gap-2">
+          {displayForecasts.map((item: any, i: number) => {
+             const dt = new Date(item.dt_txt);
+             const dayName = dt.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' });
+             return (
+               <div key={i} className="bg-root p-2 rounded border border-gray-600">
+                 <div className="font-bold text-sm text-accent">{dayName}</div>
+                 <div className="text-sm">
+                   {item.main.temp.toFixed(1)}°C, <span className="capitalize">{item.weather[0].description}</span>
+                 </div>
+               </div>
+             );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 
 // EV Trip Modal mimicking the Toplevel window
 function EVTripModal({ onClose, evSoc, evMaxRange }: { onClose: () => void, evSoc: number, evMaxRange: number }) {
@@ -287,16 +369,16 @@ function EVTripModal({ onClose, evSoc, evMaxRange }: { onClose: () => void, evSo
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50">
-      <div className="bg-frame w-[500px] max-h-[90vh] overflow-y-auto rounded shadow-lg border border-accent p-4 relative">
-        <button className="absolute top-2 right-2 text-white font-bold" onClick={onClose}>X</button>
+    <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 p-4">
+      <div className="bg-frame w-full max-w-[500px] max-h-[90vh] overflow-y-auto rounded shadow-lg border border-accent p-4 relative">
+        <button className="absolute top-2 right-2 text-white font-bold p-2 leading-none" onClick={onClose}>X</button>
         <h2 className="text-lg font-bold text-white mb-4">My EV Trip</h2>
 
         <LabelFrame title="Route Adviser">
           <div className="flex flex-col gap-2 mb-2 text-sm">
-            <div className="flex items-center"><span className="w-32">Start Location:</span><input className="flex-1 bg-input px-2 py-1 rounded" value={startLoc} onChange={e=>setStartLoc(e.target.value)} /></div>
-            <div className="flex items-center"><span className="w-32">End Location:</span><input className="flex-1 bg-input px-2 py-1 rounded" value={endLoc} onChange={e=>setEndLoc(e.target.value)} /></div>
-            <div className="flex items-center"><span className="w-32">Starting SOC (%):</span><input className="w-24 bg-input px-2 py-1 rounded" value={soc} onChange={e=>setSoc(e.target.value)} /></div>
+            <div className="flex items-center"><span className="w-32 shrink-0">Start Location:</span><input className="flex-1 w-full bg-input px-2 py-1 rounded" value={startLoc} onChange={e=>setStartLoc(e.target.value)} /></div>
+            <div className="flex items-center"><span className="w-32 shrink-0">End Location:</span><input className="flex-1 w-full bg-input px-2 py-1 rounded" value={endLoc} onChange={e=>setEndLoc(e.target.value)} /></div>
+            <div className="flex items-center"><span className="w-32 shrink-0">Starting SOC (%):</span><input className="w-24 bg-input px-2 py-1 rounded" value={soc} onChange={e=>setSoc(e.target.value)} /></div>
           </div>
           <TkButton onClick={checkRoute} disabled={isCheckingRoute}>Check Route</TkButton>
           <div className="text-sm italic mt-2 whitespace-pre-wrap">{routeStatus}</div>
@@ -304,32 +386,30 @@ function EVTripModal({ onClose, evSoc, evMaxRange }: { onClose: () => void, evSo
 
         <LabelFrame title="Find Nearby Chargers" className="mt-4">
           <div className="flex items-center gap-2 mb-2 text-sm">
-            <span>Location:</span>
-            <input className="flex-1 bg-input px-2 py-1 rounded" value={findLoc} onChange={e=>setFindLoc(e.target.value)} />
+            <span className="shrink-0">Location:</span>
+            <input className="flex-1 w-full bg-input px-2 py-1 rounded" value={findLoc} onChange={e=>setFindLoc(e.target.value)} />
           </div>
           <TkButton onClick={findChargers} disabled={isFinding}>Find Chargers</TkButton>
           <div className="text-sm italic mt-2">{findStatus}</div>
           
-          <div className="mt-4 bg-input rounded overflow-hidden text-xs">
+          <div className="mt-4 bg-input rounded overflow-hidden text-xs border border-gray-600">
             <div className="flex bg-root font-bold p-2 border-b border-gray-500">
-              <div className="w-[120px]">Charger Name</div>
-              <div className="flex-1">Address</div>
-              <div className="w-[60px] text-center">Speed</div>
-              <div className="w-[60px] text-center">Available</div>
+              <div className="w-[140px] shrink-0">Charger Name</div>
+              <div className="flex-1 pl-2 border-l border-gray-600">Address</div>
             </div>
-            <div className="max-h-[150px] overflow-y-auto">
+            <div className="max-h-[150px] overflow-y-auto custom-scrollbar">
               {chargers.map((c, i) => (
                 <div key={i} className="flex p-2 border-b border-gray-600 hover:bg-accent hover:text-root cursor-pointer">
-                  <div className="w-[120px] truncate pr-2">{c.title}</div>
-                  <div className="flex-1 truncate pr-2">{c.address}</div>
-                  <div className="w-[60px] text-center">{c.speed}kW</div>
-                  <div className="w-[60px] text-center">{c.available}</div>
+                  <div className="w-[140px] shrink-0 font-semibold">{c.title}</div>
+                  <div className="flex-1 pl-2 border-l border-gray-600 opacity-90">{c.address}</div>
                 </div>
               ))}
+              {chargers.length === 0 && (
+                 <div className="p-3 text-center opacity-60">No chargers to display</div>
+              )}
             </div>
           </div>
         </LabelFrame>
-
       </div>
     </div>
   );
@@ -339,49 +419,49 @@ function EVTripModal({ onClose, evSoc, evMaxRange }: { onClose: () => void, evSo
 function PowerFlowDiagram({ sim }: { sim: any }) {
   return (
     <div className="w-full h-full relative">
-      <svg viewBox="0 0 1000 500" className="w-full h-full">
+      <svg viewBox="0 0 1000 500" className="w-full h-full" preserveAspectRatio="xMidYMid meet">
         {/* Nodes */}
         {/* Grid */}
-        <circle cx="200" cy="250" r="40" fill={sim.gridIsDown ? "#5e636e" : "#BF616A"} stroke="white" strokeWidth="2" />
-        <text x="200" y="250" textAnchor="middle" dominantBaseline="middle" fill="white" fontWeight="bold" fontSize="12">GRID</text>
-        <text x="200" y="305" textAnchor="middle" fill="white" fontSize="12">{Math.abs(sim.powerLabels.grid).toFixed(1)} kW</text>
+        <circle cx="200" cy="250" r="50" fill={sim.gridIsDown ? "#5e636e" : "#BF616A"} stroke="white" strokeWidth="2" />
+        <text x="200" y="250" textAnchor="middle" dominantBaseline="middle" fill="white" fontWeight="bold" fontSize="16">GRID</text>
+        <text x="200" y="320" textAnchor="middle" fill="white" fontSize="14">{Math.abs(sim.powerLabels.grid).toFixed(1)} kW</text>
 
         {/* Solar */}
-        <rect x="460" y="40" width="80" height="80" fill="#EBCB8B" stroke="white" strokeWidth="2" rx="5"/>
-        <text x="500" y="80" textAnchor="middle" dominantBaseline="middle" fill="#2E3440" fontWeight="bold" fontSize="12">SOLAR</text>
-        <text x="500" y="135" textAnchor="middle" fill="white" fontSize="12">{sim.powerLabels.solar.toFixed(1)} kW</text>
+        <rect x="450" y="20" width="100" height="100" fill="#EBCB8B" stroke="white" strokeWidth="2" rx="8"/>
+        <text x="500" y="70" textAnchor="middle" dominantBaseline="middle" fill="#2E3440" fontWeight="bold" fontSize="16">SOLAR</text>
+        <text x="500" y="140" textAnchor="middle" fill="white" fontSize="14">{sim.powerLabels.solar.toFixed(1)} kW</text>
 
         {/* House */}
-        <rect x="760" y="210" width="80" height="80" fill="#88C0D0" stroke="white" strokeWidth="2" rx="5"/>
-        <text x="800" y="250" textAnchor="middle" dominantBaseline="middle" fill="#2E3440" fontWeight="bold" fontSize="12">HOUSE</text>
-        <text x="800" y="305" textAnchor="middle" fill="white" fontSize="12">{sim.powerLabels.house.toFixed(1)} kW</text>
+        <rect x="750" y="200" width="100" height="100" fill="#88C0D0" stroke="white" strokeWidth="2" rx="8"/>
+        <text x="800" y="250" textAnchor="middle" dominantBaseline="middle" fill="#2E3440" fontWeight="bold" fontSize="16">HOUSE</text>
+        <text x="800" y="320" textAnchor="middle" fill="white" fontSize="14">{sim.powerLabels.house.toFixed(1)} kW</text>
 
         {/* EV */}
-        <circle cx="500" cy="400" r="40" fill="#A3BE8C" 
+        <circle cx="500" cy="420" r="50" fill="#A3BE8C" 
           stroke={!sim.isEvPluggedIn ? "grey" : (Math.abs(sim.powerLabels.ev) > 0.1 ? "gold" : "white")} 
           strokeWidth={!sim.isEvPluggedIn ? 2 : (Math.abs(sim.powerLabels.ev) > 0.1 ? 4 : 2)} 
         />
-        <text x="500" y="400" textAnchor="middle" dominantBaseline="middle" fill="#2E3440" fontWeight="bold" fontSize="12">EV</text>
-        <text x="500" y="455" textAnchor="middle" fill="white" fontSize="12">{Math.abs(sim.powerLabels.ev).toFixed(1)} kW</text>
-        <text x="500" y="345" textAnchor="middle" fill="white" fontSize="12">SOC: {sim.evSoc.toFixed(1)}%</text>
+        <text x="500" y="420" textAnchor="middle" dominantBaseline="middle" fill="#2E3440" fontWeight="bold" fontSize="16">EV</text>
+        <text x="500" y="490" textAnchor="middle" fill="white" fontSize="14">{Math.abs(sim.powerLabels.ev).toFixed(1)} kW</text>
+        <text x="500" y="350" textAnchor="middle" fill="white" fontSize="14">SOC: {sim.evSoc.toFixed(1)}%</text>
 
         {/* Battery */}
-        <rect x="760" y="360" width="80" height="80" fill="#5E81AC" stroke="white" strokeWidth="2" rx="5"/>
-        <text x="800" y="400" textAnchor="middle" dominantBaseline="middle" fill="white" fontWeight="bold" fontSize="11">HOME BATT</text>
-        <text x="800" y="455" textAnchor="middle" fill="white" fontSize="12">{Math.abs(sim.powerLabels.battery).toFixed(1)} kW</text>
-        <text x="800" y="345" textAnchor="middle" fill="white" fontSize="12">SOC: {sim.homeBatterySoc.toFixed(1)}%</text>
+        <rect x="750" y="370" width="100" height="100" fill="#5E81AC" stroke="white" strokeWidth="2" rx="8"/>
+        <text x="800" y="420" textAnchor="middle" dominantBaseline="middle" fill="white" fontWeight="bold" fontSize="14">HOME BATT</text>
+        <text x="800" y="490" textAnchor="middle" fill="white" fontSize="14">{Math.abs(sim.powerLabels.battery).toFixed(1)} kW</text>
+        <text x="800" y="350" textAnchor="middle" fill="white" fontSize="14">SOC: {sim.homeBatterySoc.toFixed(1)}%</text>
 
         {/* Flow Lines */}
-        <FlowLine start={[240, 250]} end={[760, 250]} active={sim.flows.grid_house > 0} color="#e60000" />
-        <FlowLine start={[230, 275]} end={[470, 375]} active={sim.flows.grid_ev > 0} color="#e60000" />
-        <FlowLine start={[470, 375]} end={[230, 275]} active={sim.flows.ev_grid > 0} color="lightgreen" />
+        <FlowLine start={[250, 250]} end={[750, 250]} active={sim.flows.grid_house > 0} color="#e60000" />
+        <FlowLine start={[240, 280]} end={[460, 390]} active={sim.flows.grid_ev > 0} color="#e60000" />
+        <FlowLine start={[460, 390]} end={[240, 280]} active={sim.flows.ev_grid > 0} color="lightgreen" />
         
-        <FlowLine start={[540, 80]} end={[780, 210]} active={sim.flows.solar_house > 0} color="gold" />
-        <FlowLine start={[500, 120]} end={[500, 360]} active={sim.flows.solar_ev > 0} color="gold" />
-        <FlowLine start={[520, 120]} end={[760, 360]} active={sim.flows.solar_battery > 0} color="gold" />
+        <FlowLine start={[550, 70]} end={[770, 200]} active={sim.flows.solar_house > 0} color="gold" />
+        <FlowLine start={[500, 120]} end={[500, 370]} active={sim.flows.solar_ev > 0} color="gold" />
+        <FlowLine start={[530, 120]} end={[770, 370]} active={sim.flows.solar_battery > 0} color="gold" />
 
-        <FlowLine start={[540, 400]} end={[760, 270]} active={sim.flows.ev_house > 0} color="lightblue" />
-        <FlowLine start={[800, 360]} end={[800, 290]} active={sim.flows.battery_house > 0} color="cyan" />
+        <FlowLine start={[550, 420]} end={[750, 280]} active={sim.flows.ev_house > 0} color="lightblue" />
+        <FlowLine start={[800, 370]} end={[800, 300]} active={sim.flows.battery_house > 0} color="cyan" />
       </svg>
     </div>
   );
@@ -392,7 +472,7 @@ function FlowLine({ start, end, active, color }: { start: [number, number], end:
   return (
     <line 
       x1={start[0]} y1={start[1]} x2={end[0]} y2={end[1]} 
-      stroke={color} strokeWidth="3" strokeDasharray="6 6"
+      stroke={color} strokeWidth="4" strokeDasharray="8 8"
       className="animate-flow"
     />
   );
