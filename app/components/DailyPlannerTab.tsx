@@ -7,6 +7,7 @@ interface DailyPlannerTabProps {
   estimation: DailyEstimation | null;
   isLoading: boolean;
   onRefresh: () => void;
+  dayNumber?: number;
 }
 
 const ACTION_BG: Record<string, string> = {
@@ -25,8 +26,9 @@ const ACTION_BG: Record<string, string> = {
 const PRIORITY_COLOR = { high: 'border-red-500', medium: 'border-yellow-500', low: 'border-blue-400' };
 const PRIORITY_BG = { high: 'bg-red-900 bg-opacity-30', medium: 'bg-yellow-900 bg-opacity-20', low: 'bg-blue-900 bg-opacity-20' };
 
-export default function DailyPlannerTab({ estimation, isLoading, onRefresh }: DailyPlannerTabProps) {
-  if (isLoading) {
+export default function DailyPlannerTab({ estimation, isLoading, onRefresh, dayNumber = 1 }: DailyPlannerTabProps) {
+  // Show loading overlay ON TOP of stale data — prevents flicker
+  if (!estimation && isLoading) {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-center text-accent animate-pulse text-lg">Generating daily plan...</div>
@@ -63,10 +65,14 @@ export default function DailyPlannerTab({ estimation, isLoading, onRefresh }: Da
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-2">
         <div>
-          <h2 className="text-accent font-bold text-lg">Daily Smart Energy Plan</h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-accent font-bold text-lg">Daily Smart Energy Plan</h2>
+            <span className="bg-accent text-root text-xs font-bold px-2 py-0.5 rounded">Day {dayNumber}</span>
+            {isLoading && <span className="text-xs text-yellow-400 animate-pulse">↻ Updating...</span>}
+          </div>
           <div className="text-xs text-gray-400">{cityName} · {date}</div>
         </div>
-        <button onClick={onRefresh} className="bg-input hover:bg-accent hover:text-root text-white font-bold px-4 py-1.5 rounded text-sm transition-colors">
+        <button onClick={onRefresh} disabled={isLoading} className="bg-input hover:bg-accent hover:text-root text-white font-bold px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50">
           ↻ Refresh Plan
         </button>
       </div>

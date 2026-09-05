@@ -6,6 +6,7 @@ import {
 } from 'recharts';
 import { DegradationState, generateDegradationCurve } from '../../lib/degradation';
 import { MADDPGSchedule } from '../../lib/maddpg';
+import { EVModel, CHEMISTRY_INFO } from '../../lib/evModels';
 
 interface AnalyticsTabProps {
   degradation: DegradationState;
@@ -13,6 +14,7 @@ interface AnalyticsTabProps {
   habitAnalytics: any;
   maddpgSchedule: MADDPGSchedule | null;
   weatherTemp: number;
+  selectedEV?: EVModel;
 }
 
 const SectionTitle = ({ children }: { children: React.ReactNode }) => (
@@ -27,10 +29,15 @@ const StatCard = ({ label, value, sub, color }: { label: string; value: string; 
   </div>
 );
 
-export default function AnalyticsTab({ degradation, habits, habitAnalytics, maddpgSchedule, weatherTemp }: AnalyticsTabProps) {
+export default function AnalyticsTab({ degradation, habits, habitAnalytics, maddpgSchedule, weatherTemp, selectedEV }: AnalyticsTabProps) {
+  const batteryKwh = selectedEV?.batteryKwh ?? 79;
+  const degradationFactor = selectedEV?.degradationFactor ?? 1.0;
+  const chemistry = selectedEV?.chemistry ?? 'NMC';
+  const chemInfo = CHEMISTRY_INFO[chemistry];
+
   const degradationCurve = useMemo(() =>
-    generateDegradationCurve(degradation.soh, weatherTemp, 70, 300000, 79),
-    [degradation.soh, weatherTemp]
+    generateDegradationCurve(degradation.soh, weatherTemp, 70, 300000, batteryKwh),
+    [degradation.soh, weatherTemp, batteryKwh]
   );
 
   const sohColor = degradation.soh > 90 ? '#A3BE8C' : degradation.soh > 80 ? '#EBCB8B' : '#BF616A';
@@ -67,10 +74,35 @@ export default function AnalyticsTab({ degradation, habits, habitAnalytics, madd
       {/* === BATTERY DEGRADATION === */}
       <section>
         <SectionTitle>🔋 Battery Degradation & Life Cycles</SectionTitle>
+
+        {/* EV Model Info Card */}
+        {selectedEV && (
+          <div className="bg-input rounded p-3 mb-4 border border-gray-600 flex flex-wrap gap-4 items-start">
+            <div>
+              <div className="text-xs text-gray-400">Selected EV</div>
+              <div className="font-bold text-white">{selectedEV.flag} {selectedEV.brand} {selectedEV.model} ({selectedEV.year})</div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-400">Battery Chemistry</div>
+              <div className="font-bold" style={{ color: chemInfo?.color }}>{chemInfo?.label}</div>
+              <div className="text-[10px] text-gray-400 max-w-xs">{chemInfo?.note}</div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-400">Degradation Profile</div>
+              <div className="font-bold text-white">{degradationFactor < 0.85 ? '🟢 Excellent (LFP)' : degradationFactor < 1.0 ? '🟡 Good' : degradationFactor < 1.1 ? '🟠 Standard' : '🔴 Higher Risk'}</div>
+              <div className="text-[10px] text-gray-400">{degradationFactor}× vs baseline</div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-400">Warranty</div>
+              <div className="font-bold text-white">{selectedEV.warrantyYears} yrs / {(selectedEV.warrantyKm/1000).toFixed(0)}k km</div>
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
           <StatCard label="State of Health" value={`${degradation.soh.toFixed(1)}%`} sub="100% = new battery" color={sohColor} />
           <StatCard label="Full Equiv. Cycles" value={degradation.fec.toFixed(1)} sub="FEC completed" />
-          <StatCard label="Usable Capacity" value={`${degradation.capacityKwh.toFixed(1)} kWh`} sub={`of 79 kWh original`} />
+          <StatCard label="Usable Capacity" value={`${degradation.capacityKwh.toFixed(1)} kWh`} sub={`of ${batteryKwh} kWh original`} />
           <StatCard
             label="Est. Lifetime Remaining"
             value={`${(degradation.estimatedLifetimeKm/1000).toFixed(0)}k km`}

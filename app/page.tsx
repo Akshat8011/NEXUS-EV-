@@ -1,25 +1,26 @@
 "use client";
-import React, { useEffect, useState, useMemo, useCallback } from 'react';
-import { useSimulation } from '../hooks/useSimulation';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { useSimulation, SimParams } from '../hooks/useSimulation';
 import { useDegradation } from '../hooks/useDegradation';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
 import clsx from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { runMADDPG, OutageWindow, MADDPGSchedule } from '../lib/maddpg';
 import { generateDailyEstimation, DailyEstimation } from '../lib/dailyPlanner';
+import { EVModel, DEFAULT_EV, CHEMISTRY_INFO } from '../lib/evModels';
 import dynamic from 'next/dynamic';
 
-// Lazy-load heavy tab components
-const AnalyticsTab   = dynamic(() => import('./components/AnalyticsTab'),    { ssr: false });
+const AnalyticsTab    = dynamic(() => import('./components/AnalyticsTab'),    { ssr: false });
 const DailyPlannerTab = dynamic(() => import('./components/DailyPlannerTab'), { ssr: false });
-const OutagesTab     = dynamic(() => import('./components/OutagesTab'),      { ssr: false });
-const DigitalTwinTab = dynamic(() => import('./components/DigitalTwinTab'), { ssr: false });
+const OutagesTab      = dynamic(() => import('./components/OutagesTab'),       { ssr: false });
+const DigitalTwinTab  = dynamic(() => import('./components/DigitalTwinTab'),  { ssr: false });
+const EVSelector      = dynamic(() => import('./components/EVSelector'),       { ssr: false });
 
 export function cn(...inputs: (string | undefined | null | false)[]) {
   return twMerge(clsx(inputs));
 }
 
-const LabelFrame = ({ title, children, className }: { title: string, children: React.ReactNode, className?: string }) => (
+const LabelFrame = ({ title, children, className }: { title: string; children: React.ReactNode; className?: string }) => (
   <fieldset className={cn("border border-gray-500 p-3 rounded bg-frame mb-3", className)}>
     <legend className="text-white font-bold px-1 text-[11px]">{title}</legend>
     {children}
@@ -32,8 +33,7 @@ const TkButton = ({ children, onClick, disabled, className }: any) => (
       disabled ? "bg-disabled text-disabledText cursor-not-allowed" : "bg-accent hover:bg-ev cursor-pointer",
       className
     )}
-    onClick={onClick}
-    disabled={disabled}
+    onClick={onClick} disabled={disabled}
   >
     {children}
   </button>
@@ -43,7 +43,19 @@ const TABS = ['Dashboard', 'Analytics', 'Daily Planner', 'Outages', 'Digital Twi
 type Tab = typeof TABS[number];
 
 export default function Dashboard() {
-  const sim = useSimulation();
+  // EV model state
+  const [selectedEV, setSelectedEV] = useState<EVModel>(DEFAULT_EV);
+
+  const simParams: SimParams = {
+    evCapacityKwh:      selectedEV.batteryKwh,
+    evMaxRangeKm:       selectedEV.rangeKm,
+    chargeRateKw:       selectedEV.chargeRateKw,
+    v2gRateKw:          selectedEV.v2gCapable ? 6.0 : 0,
+    v2gCapable:         selectedEV.v2gCapable,
+    consumptionWhPerKm: selectedEV.consumptionWhPerKm,
+  };
+
+  const sim = useSimulation(simParams);
   const { state: degradation, habits, habitAnalytics, recordChargeCycle, recordHabit } = useDegradation();
 
   const [activeTab, setActiveTab] = useState<Tab>('Dashboard');
@@ -57,12 +69,15 @@ export default function Dashboard() {
   const [dailyEstimation, setDailyEstimation] = useState<DailyEstimation | null>(null);
   const [isPlannerLoading, setIsPlannerLoading] = useState(false);
 
+  // Debounce MADDPG and planner to prevent flicker
+  const maddpgTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const plannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const fetchWeather = useCallback(async (city?: string) => {
     setIsFetchingWeather(true);
     try {
       const url = city ? `/api/weather?city=${encodeURIComponent(city)}` : '/api/weather';
-      const r = await fetch(url);
-      const data = await r.json();
+      const data = await fetch(url).then(r => r.json());
       setWeather(data);
     } catch (e) { console.error(e); }
     setIsFetchingWeather(false);
@@ -70,36 +85,38 @@ export default function Dashboard() {
 
   useEffect(() => { fetchWeather('Lucknow'); }, []);
 
-  // Auto-run MADDPG whenever key inputs change
-  const weatherTemp  = weather?.current?.main?.temp ?? 25;
-  const cloudCover   = weather?.current?.clouds?.all ?? 50;
-  const forecastTemps: number[]  = weather?.forecast?.list?.slice(0,8).map((f: any) => f.main.temp) ?? [];
-  const forecastClouds: number[] = weather?.forecast?.list?.slice(0,8).map((f: any) => f.clouds.all) ?? [];
-  const forecastDescs: string[]  = weather?.forecast?.list?.slice(0,8).map((f: any) => f.weather[0].description) ?? [];
+  const weatherTemp    = weather?.current?.main?.temp ?? 25;
+  const cloudCover     = weather?.current?.clouds?.all ?? 50;
+  const forecastTemps  = weather?.forecast?.list?.slice(0,8).map((f: any) => f.main.temp) ?? [];
+  const forecastClouds = weather?.forecast?.list?.slice(0,8).map((f: any) => f.clouds.all) ?? [];
+  const forecastDescs  = weather?.forecast?.list?.slice(0,8).map((f: any) => f.weather[0].description) ?? [];
 
+  // Debounced MADDPG — runs 800ms after last change to prevent rapid rerenders
   useEffect(() => {
-    const schedule = runMADDPG({
-      currentEvSoc: sim.evSoc,
-      minRangeKm: sim.minRangeKm,
-      evMaxRangeKm: sim.evMaxRangeKm,
-      evCapacityKwh: 79.0,
-      weatherTemp,
-      cloudCoverPct: cloudCover,
-      forecastTemps,
-      forecastClouds,
-      gridIsDown: sim.gridIsDown,
-      outages,
-      batterySoh: degradation.soh,
-      homeBatterySoc: sim.homeBatterySoc,
-    });
-    setMaddpgSchedule(schedule);
-  }, [sim.evSoc, sim.minRangeKm, sim.gridIsDown, weatherTemp, cloudCover, outages, degradation.soh]);
+    if (maddpgTimerRef.current) clearTimeout(maddpgTimerRef.current);
+    maddpgTimerRef.current = setTimeout(() => {
+      const schedule = runMADDPG({
+        currentEvSoc:   sim.evSoc,
+        minRangeKm:     sim.minRangeKm,
+        evMaxRangeKm:   sim.evMaxRangeKm,
+        evCapacityKwh:  sim.evCapacityKwh,
+        weatherTemp, cloudCoverPct: cloudCover,
+        forecastTemps, forecastClouds,
+        gridIsDown: sim.gridIsDown,
+        outages,
+        batterySoh: degradation.soh,
+        homeBatterySoc: sim.homeBatterySoc,
+      });
+      setMaddpgSchedule(schedule);
+    }, 800);
+    return () => { if (maddpgTimerRef.current) clearTimeout(maddpgTimerRef.current); };
+  }, [sim.evSoc, sim.minRangeKm, sim.gridIsDown, weatherTemp, cloudCover, outages, degradation.soh, selectedEV.id]);
 
-  // Generate daily planner
-  const generatePlan = useCallback(() => {
-    if (!maddpgSchedule) return;
-    setIsPlannerLoading(true);
-    setTimeout(() => {
+  // Debounced Daily Planner — runs 1200ms after MADDPG stabilizes
+  useEffect(() => {
+    if (!maddpgSchedule || !weather?.current) return;
+    if (plannerTimerRef.current) clearTimeout(plannerTimerRef.current);
+    plannerTimerRef.current = setTimeout(() => {
       const plan = generateDailyEstimation({
         cityName: weather?.cityName ?? 'Lucknow',
         weatherTemp, cloudCoverPct: cloudCover,
@@ -111,30 +128,29 @@ export default function Dashboard() {
       });
       setDailyEstimation(plan);
       setIsPlannerLoading(false);
-    }, 300);
-  }, [maddpgSchedule, weather, weatherTemp, cloudCover, forecastTemps, forecastClouds, sim, degradation.soh, outages]);
+    }, 1200);
+    return () => { if (plannerTimerRef.current) clearTimeout(plannerTimerRef.current); };
+  }, [maddpgSchedule, weather?.cityName, weatherTemp, cloudCover]);
 
-  useEffect(() => { if (maddpgSchedule) generatePlan(); }, [maddpgSchedule]);
-
-  // Record habit after sim finishes
-  const prevSimRunning = React.useRef(false);
+  // Record habit when sim day completes
+  const prevDay = useRef(1);
   useEffect(() => {
-    if (prevSimRunning.current && !sim.isRunning && sim.timeStep > 100) {
+    if (sim.dayNumber > prevDay.current && sim.dayNumber > 1) {
       recordChargeCycle(80, sim.evSoc, weatherTemp, 1);
       recordHabit({
         date: new Date().toISOString(),
         chargingStartSoc: 80,
         chargingEndSoc: sim.evSoc,
-        estimatedKm: 30,
+        estimatedKm: 60,
         temp: weatherTemp,
         v2gSessionCount: maddpgSchedule?.v2gSessions ?? 0,
         peakSoc: 100,
         costRs: sim.totalCost,
         earningsRs: sim.totalEarnings,
       });
+      prevDay.current = sim.dayNumber;
     }
-    prevSimRunning.current = sim.isRunning;
-  }, [sim.isRunning]);
+  }, [sim.dayNumber]);
 
   const formatTime = (mins: number) => {
     const h = Math.floor(mins / 60).toString().padStart(2, '0');
@@ -142,20 +158,38 @@ export default function Dashboard() {
     return `${h}:${m}`;
   };
 
+  const generatePlan = useCallback(() => {
+    if (!maddpgSchedule || !weather?.current) return;
+    setIsPlannerLoading(true);
+    if (plannerTimerRef.current) clearTimeout(plannerTimerRef.current);
+    plannerTimerRef.current = setTimeout(() => {
+      const plan = generateDailyEstimation({
+        cityName: weather?.cityName ?? 'Lucknow',
+        weatherTemp, cloudCoverPct: cloudCover,
+        forecastTemps, forecastClouds, forecastDescriptions: forecastDescs,
+        evSoc: sim.evSoc, homeBatterySoc: sim.homeBatterySoc,
+        minRangeKm: sim.minRangeKm, evMaxRangeKm: sim.evMaxRangeKm,
+        batterySoh: degradation.soh, gridIsDown: sim.gridIsDown,
+        outages, maddpgSchedule,
+      });
+      setDailyEstimation(plan);
+      setIsPlannerLoading(false);
+    }, 300);
+  }, [maddpgSchedule, weather, weatherTemp, cloudCover, sim, degradation.soh, outages]);
+
   return (
     <div className="flex flex-col h-screen bg-root text-white overflow-hidden">
-      {/* TOP NAV BAR */}
+      {/* TOP NAV */}
       <nav className="flex items-center bg-frame border-b border-gray-600 px-3 shrink-0 overflow-x-auto">
         <div className="text-accent font-black text-sm mr-4 shrink-0 py-2">⚡ NEXUS-EV</div>
+        {/* Day badge */}
+        <div className="bg-input rounded px-3 py-1 text-xs font-bold mr-3 shrink-0 text-accent">
+          Day {sim.dayNumber}
+        </div>
         {TABS.map(tab => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            className={cn(
-              "px-3 py-3 text-xs font-bold whitespace-nowrap border-b-2 transition-colors",
-              activeTab === tab
-                ? "border-accent text-accent"
-                : "border-transparent text-gray-400 hover:text-white"
+          <button key={tab} onClick={() => setActiveTab(tab)}
+            className={cn("px-3 py-3 text-xs font-bold whitespace-nowrap border-b-2 transition-colors",
+              activeTab === tab ? "border-accent text-accent" : "border-transparent text-gray-400 hover:text-white"
             )}
           >
             {tab === 'Dashboard' ? '🏠 ' : tab === 'Analytics' ? '📊 ' : tab === 'Daily Planner' ? '📅 ' : tab === 'Outages' ? '⚡ ' : '🔮 '}
@@ -167,25 +201,57 @@ export default function Dashboard() {
       {/* MAIN CONTENT */}
       <div className="flex-1 overflow-hidden">
 
-        {/* === DASHBOARD TAB === */}
+        {/* DASHBOARD TAB */}
         {activeTab === 'Dashboard' && (
           <div className="flex flex-col lg:flex-row h-full p-2 gap-2 overflow-auto lg:overflow-hidden">
+
             {/* LEFT PANEL */}
             <div className="w-full lg:w-[300px] flex flex-col shrink-0 custom-scrollbar lg:overflow-y-auto lg:pr-1">
 
-              <LabelFrame title="Simulation Control">
-                <TkButton onClick={sim.startSim} disabled={sim.isRunning && sim.timeStep > 0} className="mb-2">Start 24-Hour Day</TkButton>
-                <div className="flex gap-2">
-                  <TkButton onClick={sim.pauseSim} disabled={!sim.isRunning}>Pause</TkButton>
-                  <TkButton onClick={() => sim.startSim()} disabled={sim.isRunning || sim.timeStep === 0}>Resume</TkButton>
+              {/* EV Model Selector */}
+              <LabelFrame title="EV Model">
+                <EVSelector selected={selectedEV} onSelect={(model) => {
+                  setSelectedEV(model);
+                  sim.resetAll();
+                }} />
+                <div className="mt-2 text-[10px] space-y-0.5">
+                  <div className="flex justify-between"><span className="text-gray-400">Battery:</span><span>{selectedEV.batteryKwh} kWh</span></div>
+                  <div className="flex justify-between"><span className="text-gray-400">Range:</span><span>{selectedEV.rangeKm} km WLTP</span></div>
+                  <div className="flex justify-between"><span className="text-gray-400">AC Charge:</span><span>{selectedEV.chargeRateKw} kW</span></div>
+                  <div className="flex justify-between"><span className="text-gray-400">DC Charge:</span><span>{selectedEV.dcChargeRateKw} kW</span></div>
+                  <div className="flex justify-between"><span className="text-gray-400">Chemistry:</span>
+                    <span style={{ color: CHEMISTRY_INFO[selectedEV.chemistry]?.color }}>{selectedEV.chemistry}</span>
+                  </div>
+                  <div className="flex justify-between"><span className="text-gray-400">V2G:</span>
+                    <span className={selectedEV.v2gCapable ? 'text-green-400' : 'text-gray-500'}>{selectedEV.v2gCapable ? '✓ Capable' : '✗ Not available'}</span>
+                  </div>
                 </div>
+              </LabelFrame>
+
+              <LabelFrame title="Simulation Control">
+                <div className="text-xs text-accent font-bold text-center mb-2">
+                  📅 Day {sim.dayNumber} · {formatTime(sim.timeStep)}
+                  {sim.timeStep >= 1430 && <span className="ml-2 text-yellow-400 animate-pulse">⏩ Next day...</span>}
+                </div>
+                <TkButton onClick={sim.startSim} disabled={sim.isRunning && sim.timeStep > 0 && sim.timeStep < 1440} className="mb-2">
+                  {sim.timeStep === 0 ? 'Start Day 1' : sim.timeStep >= 1440 ? '⏩ Next Day' : 'Start 24-Hour Day'}
+                </TkButton>
+                <div className="flex gap-2 mb-2">
+                  <TkButton onClick={sim.pauseSim} disabled={!sim.isRunning}>Pause</TkButton>
+                  <TkButton onClick={sim.startSim} disabled={sim.isRunning || sim.timeStep === 0}>Resume</TkButton>
+                </div>
+                <TkButton onClick={sim.resetAll} className="bg-gridDown hover:bg-red-700 text-xs">Reset All Days</TkButton>
               </LabelFrame>
 
               <LabelFrame title="System Status">
                 <div className="flex justify-between items-end mb-2">
                   <div>
-                    <div className="text-xs mb-0.5">Current Time:</div>
-                    <div className="text-xl font-bold">{formatTime(sim.timeStep)}</div>
+                    <div className="text-xs mb-0.5">Day {sim.dayNumber} — {formatTime(sim.timeStep)}</div>
+                    <div className={cn("font-bold text-sm",
+                      sim.mode.includes("BLACKOUT") ? "text-red-500" :
+                      sim.mode.includes("V2H") ? "text-orange-400" :
+                      sim.mode.includes("Driving") ? "text-[#EBCB8B]" : "text-[#88C0D0]"
+                    )}>Mode: {sim.mode}</div>
                   </div>
                   <div className={cn("font-bold text-xs", sim.isEvPluggedIn ? "text-[#A3BE8C]" : "text-[#BF616A]")}>
                     EV: {sim.isEvPluggedIn ? "Plugged In" : "Unplugged"}
@@ -198,12 +264,11 @@ export default function Dashboard() {
                   <div className="font-bold text-sm">EV SOC: {sim.evSoc.toFixed(1)}%</div>
                   <div className="text-xs">Range: {((sim.evSoc/100)*sim.evMaxRangeKm).toFixed(0)} km</div>
                 </div>
-                <div className={cn("font-bold text-sm",
-                  sim.mode.includes("BLACKOUT") ? "text-red-500" :
-                  sim.mode.includes("V2H") ? "text-orange-400" :
-                  sim.mode.includes("Driving") ? "text-[#EBCB8B]" : "text-[#88C0D0]"
-                )}>Mode: {sim.mode}</div>
-                {degradation.soh < 95 && (
+                <div className="flex justify-between text-xs text-gray-400">
+                  <span>Today: ₹{(sim.totalEarnings - sim.totalCost).toFixed(1)}</span>
+                  <span>Total: ₹{(sim.cumulativeEarnings - sim.cumulativeCost).toFixed(1)}</span>
+                </div>
+                {degradation.soh < 98 && (
                   <div className="text-xs text-yellow-400 mt-1">Battery SoH: {degradation.soh.toFixed(1)}%</div>
                 )}
               </LabelFrame>
@@ -236,7 +301,8 @@ export default function Dashboard() {
 
               <LabelFrame title="User Settings">
                 <div className="text-xs mb-1">V2G Reserve Range: {sim.minRangeKm} km</div>
-                <input type="range" min="0" max="450" value={sim.minRangeKm}
+                <input type="range" min="0" max={selectedEV.rangeKm - 50}
+                  value={sim.minRangeKm}
                   onChange={e => sim.setMinRangeKm(Number(e.target.value))}
                   className="w-full accent-accent h-1 rounded appearance-none" />
               </LabelFrame>
@@ -251,13 +317,34 @@ export default function Dashboard() {
                 </div>
               </LabelFrame>
 
+              {/* Multi-day summary */}
+              {sim.dailySummaries.length > 0 && (
+                <LabelFrame title="Multi-Day History">
+                  <div className="space-y-1">
+                    {sim.dailySummaries.map((d, i) => (
+                      <div key={i} className="flex justify-between text-xs border-b border-gray-700 pb-1">
+                        <span className="text-accent font-bold">Day {d.day}</span>
+                        <span className={d.netRs >= 0 ? 'text-green-400' : 'text-red-400'}>₹{d.netRs.toFixed(1)}</span>
+                        <span className="text-gray-400">SoC: {d.startSoc.toFixed(0)}→{d.endSoc.toFixed(0)}%</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="text-xs mt-2 pt-2 border-t border-gray-600 flex justify-between">
+                    <span className="text-gray-400">Cumulative:</span>
+                    <span className={sim.cumulativeEarnings - sim.cumulativeCost >= 0 ? 'text-green-400 font-bold' : 'text-red-400 font-bold'}>
+                      ₹{(sim.cumulativeEarnings - sim.cumulativeCost).toFixed(2)}
+                    </span>
+                  </div>
+                </LabelFrame>
+              )}
+
               {maddpgSchedule && (
-                <LabelFrame title="MADDPG Schedule">
+                <LabelFrame title="MADDPG Today">
                   <div className="text-xs space-y-1">
                     <div className="flex justify-between"><span className="text-gray-400">Net Estimate:</span><span className={maddpgSchedule.netEstimate >= 0 ? 'text-green-400' : 'text-red-400'}>₹{maddpgSchedule.netEstimate.toFixed(2)}</span></div>
-                    <div className="flex justify-between"><span className="text-gray-400">V2G Sessions:</span><span>{maddpgSchedule.v2gSessions}</span></div>
-                    <div className="flex justify-between"><span className="text-gray-400">Solar:</span><span className="text-yellow-400">{maddpgSchedule.solarEnergyKwh} kWh</span></div>
-                    <div className="flex justify-between"><span className="text-gray-400">Agent Reward:</span><span className="text-accent">{maddpgSchedule.overallReward.toFixed(1)}</span></div>
+                    <div className="flex justify-between"><span className="text-gray-400">V2G Sessions:</span><span>{selectedEV.v2gCapable ? maddpgSchedule.v2gSessions : 'N/A (no V2G)'}</span></div>
+                    <div className="flex justify-between"><span className="text-gray-400">Solar Est.:</span><span className="text-yellow-400">{maddpgSchedule.solarEnergyKwh} kWh</span></div>
+                    <div className="flex justify-between"><span className="text-gray-400">Reward:</span><span className="text-accent">{maddpgSchedule.overallReward.toFixed(1)}</span></div>
                   </div>
                 </LabelFrame>
               )}
@@ -268,8 +355,11 @@ export default function Dashboard() {
 
               <LabelFrame title="Financials">
                 <div className="text-center">
-                  <div className="text-lg font-bold">Net: ₹{(sim.totalEarnings - sim.totalCost).toFixed(2)}</div>
-                  <div className="text-xs text-gray-400">Cost: ₹{sim.totalCost.toFixed(2)} | Earn: ₹{sim.totalEarnings.toFixed(2)}</div>
+                  <div className="text-base font-bold">Today: ₹{(sim.totalEarnings - sim.totalCost).toFixed(2)}</div>
+                  <div className="text-xs text-gray-400 mt-0.5">Cost: ₹{sim.totalCost.toFixed(2)} | Earn: ₹{sim.totalEarnings.toFixed(2)}</div>
+                  {sim.dayNumber > 1 && (
+                    <div className="text-sm font-bold text-accent mt-1">Total: ₹{(sim.cumulativeEarnings - sim.cumulativeCost).toFixed(2)}</div>
+                  )}
                 </div>
               </LabelFrame>
             </div>
@@ -277,7 +367,7 @@ export default function Dashboard() {
             {/* RIGHT PANEL */}
             <div className="flex-1 flex flex-col md:flex-row gap-2 bg-frame p-2 rounded lg:overflow-hidden min-h-[600px] lg:min-h-0">
               <div className="w-full md:w-[45%] h-[280px] md:h-full relative border-b-2 md:border-b-0 md:border-r-2 border-root pb-2 md:pb-0 md:pr-2 shrink-0">
-                <PowerFlowDiagram sim={sim} />
+                <PowerFlowDiagram sim={sim} evModel={selectedEV} />
               </div>
               <div className="w-full md:w-[55%] flex flex-col gap-1.5 md:pl-2 h-[540px] md:h-full">
                 <ChartWrapper title="Battery SOC (%)" yLabel="SOC (%)">
@@ -312,12 +402,32 @@ export default function Dashboard() {
                     <Line type="stepAfter" dataKey="gridNet" stroke="purple" name="Grid Net (kW)" dot={false} strokeWidth={1.5} isAnimationActive={false}/>
                   </LineChart>
                 </ChartWrapper>
+
+                {/* Multi-day summary bar chart */}
+                {sim.dailySummaries.length > 1 && (
+                  <div className="h-[140px] w-full bg-white text-black border border-gray-300 flex flex-col shrink-0">
+                    <div className="text-center text-[10px] font-bold pt-1">Daily Net Profit (₹) — Multi-Day</div>
+                    <div className="flex-1 p-1">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={sim.dailySummaries} margin={{ top: 2, right: 4, left: -20, bottom: 2 }}>
+                          <XAxis dataKey="day" tick={{ fontSize: 9 }} tickFormatter={v => `D${v}`} />
+                          <YAxis tick={{ fontSize: 9 }} />
+                          <Tooltip formatter={(v: any) => [`₹${Number(v).toFixed(2)}`, 'Net']} />
+                          <Bar dataKey="netRs" name="Net ₹" radius={2}>
+                            {sim.dailySummaries.map((d, i) => (
+                              <Cell key={i} fill={d.netRs >= 0 ? '#A3BE8C' : '#BF616A'} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>
         )}
 
-        {/* === ANALYTICS TAB === */}
         {activeTab === 'Analytics' && (
           <AnalyticsTab
             degradation={degradation}
@@ -325,19 +435,17 @@ export default function Dashboard() {
             habitAnalytics={habitAnalytics}
             maddpgSchedule={maddpgSchedule}
             weatherTemp={weatherTemp}
+            selectedEV={selectedEV}
           />
         )}
-
-        {/* === DAILY PLANNER TAB === */}
         {activeTab === 'Daily Planner' && (
           <DailyPlannerTab
             estimation={dailyEstimation}
             isLoading={isPlannerLoading}
             onRefresh={generatePlan}
+            dayNumber={sim.dayNumber}
           />
         )}
-
-        {/* === OUTAGES TAB === */}
         {activeTab === 'Outages' && (
           <OutagesTab
             outages={outages}
@@ -345,8 +453,6 @@ export default function Dashboard() {
             maddpgActions={maddpgSchedule?.actions ?? []}
           />
         )}
-
-        {/* === DIGITAL TWIN TAB === */}
         {activeTab === 'Digital Twin' && (
           <DigitalTwinTab
             sim={sim}
@@ -357,7 +463,6 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* Modals */}
       {isTripModalOpen && <EVTripModal onClose={() => setIsTripModalOpen(false)} evSoc={sim.evSoc} evMaxRange={sim.evMaxRangeKm} />}
       {isForecastModalOpen && weather?.forecast && (
         <ForecastModal onClose={() => setIsForecastModalOpen(false)} forecast={weather.forecast} city={weather.cityName} />
@@ -366,9 +471,11 @@ export default function Dashboard() {
   );
 }
 
+// ─── Helpers ───────────────────────────────────────────────────────────────────
+
 function ChartWrapper({ title, yLabel, children, xLabel }: { title: string; yLabel: string; children: React.ReactNode; xLabel?: string }) {
   return (
-    <div className="h-1/3 min-h-[160px] md:min-h-0 w-full bg-white text-black relative border border-gray-300 flex flex-col">
+    <div className="h-1/3 min-h-[150px] md:min-h-0 w-full bg-white text-black relative border border-gray-300 flex flex-col">
       <div className="text-center text-xs font-bold pt-1">{title}</div>
       <div className="absolute left-[-8px] top-1/2 -rotate-90 text-[9px] origin-center -translate-y-1/2 -translate-x-1/2">{yLabel}</div>
       {xLabel && <div className="absolute bottom-1 left-1/2 -translate-x-1/2 text-[9px] z-10">{xLabel}</div>}
@@ -380,33 +487,25 @@ function ChartWrapper({ title, yLabel, children, xLabel }: { title: string; yLab
 }
 
 function ForecastModal({ onClose, forecast, city }: { onClose: () => void; forecast: any; city: string }) {
-  const dailyForecasts = forecast.list.filter((item: any) => item.dt_txt.includes("12:00:00"));
-  let displayForecasts = dailyForecasts;
-  if (displayForecasts.length === 0) {
-    const uniqueDays: any = {};
-    forecast.list.forEach((item: any) => {
-      const day = item.dt_txt.split(' ')[0];
-      if (!uniqueDays[day]) uniqueDays[day] = item;
-    });
-    displayForecasts = Object.values(uniqueDays).slice(1, 6);
-  }
+  const daily = forecast.list.filter((i: any) => i.dt_txt.includes("12:00:00"));
+  const display = daily.length > 0 ? daily : Object.values(
+    forecast.list.reduce((acc: any, i: any) => {
+      const d = i.dt_txt.split(' ')[0]; if (!acc[d]) acc[d] = i; return acc;
+    }, {})
+  ).slice(1, 6) as any[];
   return (
     <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 p-4">
       <div className="bg-frame w-full max-w-[350px] rounded shadow-lg border border-accent p-4 relative">
         <button className="absolute top-2 right-2 text-white font-bold p-2 leading-none" onClick={onClose}>X</button>
         <h2 className="text-lg font-bold mb-4 text-center">5-Day Forecast ({city})</h2>
         <div className="flex flex-col gap-2">
-          {displayForecasts.map((item: any, i: number) => {
-            const dt = new Date(item.dt_txt);
-            const dayName = dt.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' });
-            return (
-              <div key={i} className="bg-root p-2 rounded border border-gray-600">
-                <div className="font-bold text-sm text-accent">{dayName}</div>
-                <div className="text-sm">{item.main.temp.toFixed(1)}°C · <span className="capitalize">{item.weather[0].description}</span></div>
-                <div className="text-xs text-gray-400">Clouds: {item.clouds.all}% · Humidity: {item.main.humidity}%</div>
-              </div>
-            );
-          })}
+          {display.map((item: any, i: number) => (
+            <div key={i} className="bg-root p-2 rounded border border-gray-600">
+              <div className="font-bold text-sm text-accent">{new Date(item.dt_txt).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' })}</div>
+              <div className="text-sm">{item.main.temp.toFixed(1)}°C · <span className="capitalize">{item.weather[0].description}</span></div>
+              <div className="text-xs text-gray-400">Clouds: {item.clouds.all}% · Humidity: {item.main.humidity}%</div>
+            </div>
+          ))}
         </div>
       </div>
     </div>
@@ -425,34 +524,23 @@ function EVTripModal({ onClose, evSoc, evMaxRange }: { onClose: () => void; evSo
   const [isFinding, setIsFinding] = useState(false);
 
   const checkRoute = async () => {
-    setIsCheckingRoute(true);
-    setRouteStatus("Checking route...");
+    setIsCheckingRoute(true); setRouteStatus("Checking route...");
     try {
-      const res = await fetch('/api/route-adviser', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ startLoc, endLoc }) });
-      const data = await res.json();
+      const data = await fetch('/api/route-adviser', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ startLoc, endLoc }) }).then(r => r.json());
       if (data.error) { setRouteStatus(`Error: ${data.error}`); }
       else {
-        const dist = data.distanceKm;
-        const currentRange = (Number(soc) / 100) * evMaxRange;
-        let msg = `Distance: ${dist.toFixed(1)} km. Range: ${currentRange.toFixed(1)} km.\n\n`;
-        msg += dist > (currentRange - 50) ? `⚠️ You need to charge. Need ~${(dist+50).toFixed(0)} km range.` : `✅ Enough range for this trip!`;
-        setRouteStatus(msg);
+        const dist = data.distanceKm; const currentRange = (Number(soc)/100)*evMaxRange;
+        setRouteStatus(`Distance: ${dist.toFixed(1)} km | Range: ${currentRange.toFixed(1)} km\n\n${dist > currentRange - 50 ? `⚠️ Need to charge. Require ~${(dist+50).toFixed(0)} km range.` : '✅ Enough range!'}`);
       }
     } catch (e: any) { setRouteStatus(`Error: ${e.message}`); }
     setIsCheckingRoute(false);
   };
-
   const findChargers = async () => {
-    setIsFinding(true);
-    setFindStatus(`Finding chargers near ${findLoc}...`);
+    setIsFinding(true); setFindStatus(`Finding near ${findLoc}...`);
     try {
-      const res = await fetch(`/api/chargers?location=${encodeURIComponent(findLoc)}`);
-      const data = await res.json();
+      const data = await fetch(`/api/chargers?location=${encodeURIComponent(findLoc)}`).then(r => r.json());
       if (data.error) { setFindStatus(`Error: ${data.error}`); }
-      else {
-        setChargers(data.chargers || []);
-        setFindStatus(data.chargers?.length === 0 ? "No chargers found within 25km." : `Found ${data.chargers.length} chargers near ${findLoc}.`);
-      }
+      else { setChargers(data.chargers||[]); setFindStatus(data.chargers?.length===0 ? "None found." : `Found ${data.chargers.length} chargers.`); }
     } catch (e: any) { setFindStatus(`Error: ${e.message}`); }
     setIsFinding(false);
   };
@@ -464,9 +552,9 @@ function EVTripModal({ onClose, evSoc, evMaxRange }: { onClose: () => void; evSo
         <h2 className="text-lg font-bold mb-4">My EV Trip</h2>
         <LabelFrame title="Route Adviser">
           <div className="flex flex-col gap-2 mb-2 text-sm">
-            <div className="flex items-center"><span className="w-32 shrink-0">Start:</span><input className="flex-1 bg-input px-2 py-1 rounded" value={startLoc} onChange={e => setStartLoc(e.target.value)} /></div>
-            <div className="flex items-center"><span className="w-32 shrink-0">End:</span><input className="flex-1 bg-input px-2 py-1 rounded" value={endLoc} onChange={e => setEndLoc(e.target.value)} /></div>
-            <div className="flex items-center"><span className="w-32 shrink-0">Current SOC (%):</span><input className="w-20 bg-input px-2 py-1 rounded" value={soc} onChange={e => setSoc(e.target.value)} /></div>
+            <div className="flex items-center gap-2"><span className="w-28 shrink-0">Start:</span><input className="flex-1 bg-input px-2 py-1 rounded" value={startLoc} onChange={e=>setStartLoc(e.target.value)}/></div>
+            <div className="flex items-center gap-2"><span className="w-28 shrink-0">End:</span><input className="flex-1 bg-input px-2 py-1 rounded" value={endLoc} onChange={e=>setEndLoc(e.target.value)}/></div>
+            <div className="flex items-center gap-2"><span className="w-28 shrink-0">SOC (%):</span><input className="w-20 bg-input px-2 py-1 rounded" value={soc} onChange={e=>setSoc(e.target.value)}/></div>
           </div>
           <TkButton onClick={checkRoute} disabled={isCheckingRoute}>Check Route</TkButton>
           <div className="text-sm italic mt-2 whitespace-pre-wrap">{routeStatus}</div>
@@ -474,23 +562,22 @@ function EVTripModal({ onClose, evSoc, evMaxRange }: { onClose: () => void; evSo
         <LabelFrame title="Find Nearby Chargers" className="mt-3">
           <div className="flex items-center gap-2 mb-2 text-sm">
             <span className="shrink-0">Location:</span>
-            <input className="flex-1 bg-input px-2 py-1 rounded" value={findLoc} onChange={e => setFindLoc(e.target.value)} />
+            <input className="flex-1 bg-input px-2 py-1 rounded" value={findLoc} onChange={e=>setFindLoc(e.target.value)}/>
           </div>
           <TkButton onClick={findChargers} disabled={isFinding}>Find Chargers</TkButton>
           <div className="text-sm italic mt-2">{findStatus}</div>
           <div className="mt-3 bg-input rounded overflow-hidden text-xs border border-gray-600">
             <div className="flex bg-root font-bold p-2 border-b border-gray-500">
-              <div className="w-[130px] shrink-0">Charger Name</div>
-              <div className="flex-1 pl-2">Address</div>
+              <div className="w-[130px] shrink-0">Name</div><div className="flex-1 pl-2">Address</div>
             </div>
             <div className="max-h-[140px] overflow-y-auto custom-scrollbar">
-              {chargers.map((c, i) => (
-                <div key={i} className="flex p-2 border-b border-gray-600 hover:bg-accent hover:text-root cursor-pointer">
+              {chargers.map((c,i)=>(
+                <div key={i} className="flex p-2 border-b border-gray-600 hover:bg-accent hover:text-root">
                   <div className="w-[130px] shrink-0 font-semibold truncate">{c.title}</div>
-                  <div className="flex-1 pl-2 border-l border-gray-600 opacity-90 truncate">{c.address}</div>
+                  <div className="flex-1 pl-2 border-l border-gray-600 truncate">{c.address}</div>
                 </div>
               ))}
-              {chargers.length === 0 && <div className="p-3 text-center opacity-60">No chargers to display</div>}
+              {chargers.length===0&&<div className="p-3 text-center opacity-60">No chargers to display</div>}
             </div>
           </div>
         </LabelFrame>
@@ -499,11 +586,11 @@ function EVTripModal({ onClose, evSoc, evMaxRange }: { onClose: () => void; evSo
   );
 }
 
-function PowerFlowDiagram({ sim }: { sim: any }) {
+function PowerFlowDiagram({ sim, evModel }: { sim: any; evModel: EVModel }) {
   return (
     <div className="w-full h-full">
       <svg viewBox="0 0 1000 500" className="w-full h-full" preserveAspectRatio="xMidYMid meet">
-        <circle cx="200" cy="250" r="50" fill={sim.gridIsDown ? "#5e636e" : "#BF616A"} stroke="white" strokeWidth="2" />
+        <circle cx="200" cy="250" r="50" fill={sim.gridIsDown ? "#5e636e" : "#BF616A"} stroke="white" strokeWidth="2"/>
         <text x="200" y="250" textAnchor="middle" dominantBaseline="middle" fill="white" fontWeight="bold" fontSize="16">GRID</text>
         <text x="200" y="320" textAnchor="middle" fill="white" fontSize="12">{Math.abs(sim.powerLabels.grid).toFixed(1)} kW</text>
 
@@ -515,11 +602,12 @@ function PowerFlowDiagram({ sim }: { sim: any }) {
         <text x="800" y="245" textAnchor="middle" dominantBaseline="middle" fill="#2E3440" fontWeight="bold" fontSize="14">HOUSE</text>
         <text x="800" y="310" textAnchor="middle" fill="white" fontSize="12">{sim.powerLabels.house.toFixed(1)} kW</text>
 
+        {/* EV — shows model brand */}
         <circle cx="500" cy="410" r="50" fill="#A3BE8C"
-          stroke={!sim.isEvPluggedIn ? "grey" : (Math.abs(sim.powerLabels.ev) > 0.1 ? "gold" : "white")}
-          strokeWidth={Math.abs(sim.powerLabels.ev) > 0.1 ? 4 : 2}
-        />
-        <text x="500" y="410" textAnchor="middle" dominantBaseline="middle" fill="#2E3440" fontWeight="bold" fontSize="16">EV</text>
+          stroke={!sim.isEvPluggedIn ? "grey" : Math.abs(sim.powerLabels.ev)>0.1 ? "gold" : "white"}
+          strokeWidth={Math.abs(sim.powerLabels.ev)>0.1 ? 4 : 2}/>
+        <text x="500" y="403" textAnchor="middle" dominantBaseline="middle" fill="#2E3440" fontWeight="bold" fontSize="11">{evModel.brand}</text>
+        <text x="500" y="420" textAnchor="middle" dominantBaseline="middle" fill="#2E3440" fontSize="9">{evModel.batteryKwh}kWh</text>
         <text x="500" y="480" textAnchor="middle" fill="white" fontSize="12">{Math.abs(sim.powerLabels.ev).toFixed(1)} kW</text>
         <text x="500" y="345" textAnchor="middle" fill="white" fontSize="12">SOC: {sim.evSoc.toFixed(1)}%</text>
 
@@ -528,20 +616,20 @@ function PowerFlowDiagram({ sim }: { sim: any }) {
         <text x="800" y="470" textAnchor="middle" fill="white" fontSize="12">{Math.abs(sim.powerLabels.battery).toFixed(1)} kW</text>
         <text x="800" y="345" textAnchor="middle" fill="white" fontSize="12">SOC: {sim.homeBatterySoc.toFixed(1)}%</text>
 
-        <FlowLine start={[250,250]} end={[750,245]} active={sim.flows.grid_house > 0} color="#e60000" />
-        <FlowLine start={[240,275]} end={[460,385]} active={sim.flows.grid_ev > 0} color="#e60000" />
-        <FlowLine start={[460,385]} end={[240,275]} active={sim.flows.ev_grid > 0} color="lightgreen" />
-        <FlowLine start={[550,65]} end={[750,215]} active={sim.flows.solar_house > 0} color="gold" />
-        <FlowLine start={[500,110]} end={[500,360]} active={sim.flows.solar_ev > 0} color="gold" />
-        <FlowLine start={[530,110]} end={[750,375]} active={sim.flows.solar_battery > 0} color="gold" />
-        <FlowLine start={[550,410]} end={[750,265]} active={sim.flows.ev_house > 0} color="lightblue" />
-        <FlowLine start={[800,360]} end={[800,290]} active={sim.flows.battery_house > 0} color="cyan" />
+        <FlowLine start={[250,250]} end={[750,245]} active={sim.flows.grid_house>0} color="#e60000"/>
+        <FlowLine start={[240,275]} end={[460,385]} active={sim.flows.grid_ev>0} color="#e60000"/>
+        <FlowLine start={[460,385]} end={[240,275]} active={sim.flows.ev_grid>0} color="lightgreen"/>
+        <FlowLine start={[550,65]} end={[750,215]} active={sim.flows.solar_house>0} color="gold"/>
+        <FlowLine start={[500,110]} end={[500,360]} active={sim.flows.solar_ev>0} color="gold"/>
+        <FlowLine start={[530,110]} end={[750,375]} active={sim.flows.solar_battery>0} color="gold"/>
+        <FlowLine start={[550,410]} end={[750,265]} active={sim.flows.ev_house>0} color="lightblue"/>
+        <FlowLine start={[800,360]} end={[800,290]} active={sim.flows.battery_house>0} color="cyan"/>
       </svg>
     </div>
   );
 }
 
-function FlowLine({ start, end, active, color }: { start: [number,number]; end: [number,number]; active: boolean; color: string }) {
+function FlowLine({ start, end, active, color }: { start:[number,number]; end:[number,number]; active:boolean; color:string }) {
   if (!active) return null;
-  return <line x1={start[0]} y1={start[1]} x2={end[0]} y2={end[1]} stroke={color} strokeWidth="4" strokeDasharray="8 8" className="animate-flow" />;
+  return <line x1={start[0]} y1={start[1]} x2={end[0]} y2={end[1]} stroke={color} strokeWidth="4" strokeDasharray="8 8" className="animate-flow"/>;
 }
