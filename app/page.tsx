@@ -15,6 +15,7 @@ const DailyPlannerTab = dynamic(() => import('./components/DailyPlannerTab'), { 
 const OutagesTab      = dynamic(() => import('./components/OutagesTab'),       { ssr: false });
 const DigitalTwinTab  = dynamic(() => import('./components/DigitalTwinTab'),  { ssr: false });
 const EVSelector      = dynamic(() => import('./components/EVSelector'),       { ssr: false });
+const DailyBillsTab   = dynamic(() => import('./components/DailyBillsTab'),    { ssr: false });
 
 export function cn(...inputs: (string | undefined | null | false)[]) {
   return twMerge(clsx(inputs));
@@ -39,7 +40,7 @@ const TkButton = ({ children, onClick, disabled, className }: any) => (
   </button>
 );
 
-const TABS = ['Dashboard', 'Analytics', 'Daily Planner', 'Outages', 'Digital Twin'] as const;
+const TABS = ['Dashboard', 'Analytics', 'Daily Planner', 'Outages', 'Digital Twin', 'Detailed Bills'] as const;
 type Tab = typeof TABS[number];
 
 export default function Dashboard() {
@@ -225,7 +226,7 @@ export default function Dashboard() {
               activeTab === tab ? "border-accent text-accent" : "border-transparent text-gray-400 hover:text-white"
             )}
           >
-            {tab === 'Dashboard' ? '🏠 ' : tab === 'Analytics' ? '📊 ' : tab === 'Daily Planner' ? '📅 ' : tab === 'Outages' ? '⚡ ' : '🔮 '}
+            {tab === 'Dashboard' ? '🏠 ' : tab === 'Analytics' ? '📊 ' : tab === 'Daily Planner' ? '📅 ' : tab === 'Outages' ? '⚡ ' : tab === 'Digital Twin' ? '🔮 ' : '🧾 '}
             {tab}
           </button>
         ))}
@@ -344,20 +345,31 @@ export default function Dashboard() {
                 <div className={cn("font-bold text-center text-sm mb-2", sim.gridIsDown ? "text-[#BF616A]" : "text-[#A3BE8C]")}>
                   Grid: {sim.gridIsDown ? "OFFLINE" : "CONNECTED"}
                 </div>
-                <div className="flex gap-2">
+                <div className="flex gap-2 mb-2">
                   <TkButton onClick={() => sim.setGridIsDown(true)}>Grid Failure</TkButton>
                   <TkButton onClick={() => sim.setGridIsDown(false)}>Restore Grid</TkButton>
+                </div>
+                <div className="flex gap-2">
+                  <TkButton 
+                    onClick={() => sim.setIsManualV2H(!sim.isManualV2H)}
+                    disabled={!selectedEV.v2gCapable}
+                    className={sim.isManualV2H ? "!bg-purple-600 !text-white" : ""}
+                  >
+                    {sim.isManualV2H ? "Stop Manual V2H" : "Power Home Manually"}
+                  </TkButton>
                 </div>
               </LabelFrame>
 
               {/* Multi-day summary */}
-              {sim.dailySummaries.length > 0 && (
+              {sim.dailyBills.length > 0 && (
                 <LabelFrame title="Multi-Day History">
                   <div className="space-y-1">
-                    {sim.dailySummaries.map((d, i) => (
+                    {sim.dailyBills.map((d, i) => (
                       <div key={i} className="flex justify-between text-xs border-b border-gray-700 pb-1">
                         <span className="text-accent font-bold">Day {d.day}</span>
-                        <span className={d.netRs >= 0 ? 'text-green-400' : 'text-red-400'}>₹{d.netRs.toFixed(1)}</span>
+                        <span className={d.netCostRs >= 0 ? 'text-red-400' : 'text-emerald-400'}>
+                          {d.netCostRs >= 0 ? '+' : ''}₹{d.netCostRs.toFixed(1)}
+                        </span>
                         <span className="text-gray-400">SoC: {d.startSoc.toFixed(0)}→{d.endSoc.toFixed(0)}%</span>
                       </div>
                     ))}
@@ -437,18 +449,19 @@ export default function Dashboard() {
                 </ChartWrapper>
 
                 {/* Multi-day summary bar chart */}
-                {sim.dailySummaries.length > 1 && (
+                {sim.dailyBills.length > 1 && (
                   <div className="h-[140px] w-full bg-white text-black border border-gray-300 flex flex-col shrink-0">
                     <div className="text-center text-[10px] font-bold pt-1">Daily Net Profit (₹) — Multi-Day</div>
                     <div className="flex-1 p-1">
                       <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={sim.dailySummaries} margin={{ top: 2, right: 4, left: -20, bottom: 2 }}>
-                          <XAxis dataKey="day" tick={{ fontSize: 9 }} tickFormatter={v => `D${v}`} />
-                          <YAxis tick={{ fontSize: 9 }} />
-                          <Tooltip formatter={(v: any) => [`₹${Number(v).toFixed(2)}`, 'Net']} />
-                          <Bar dataKey="netRs" name="Net ₹" radius={2}>
-                            {sim.dailySummaries.map((d, i) => (
-                              <Cell key={i} fill={d.netRs >= 0 ? '#A3BE8C' : '#BF616A'} />
+                        <BarChart data={sim.dailyBills}>
+                          <CartesianGrid strokeDasharray="3 3" vertical={false} opacity={0.2} />
+                          <XAxis dataKey="day" tick={{ fontSize: 10, fill: '#888' }} axisLine={false} tickLine={false} />
+                          <YAxis tick={{ fontSize: 10, fill: '#888' }} axisLine={false} tickLine={false} />
+                          <Tooltip contentStyle={{ backgroundColor: '#1F2937', border: 'none', borderRadius: '4px', fontSize: '12px' }} />
+                          <Bar dataKey="netCostRs" name="Net ₹" radius={2}>
+                            {sim.dailyBills.map((d, i) => (
+                              <Cell key={i} fill={d.netCostRs <= 0 ? '#A3BE8C' : '#BF616A'} />
                             ))}
                           </Bar>
                         </BarChart>
@@ -500,6 +513,11 @@ export default function Dashboard() {
             degradation={degradation}
             maddpgSchedule={maddpgSchedule}
             selectedEV={selectedEV}
+          />
+        )}
+        {activeTab === 'Detailed Bills' && (
+          <DailyBillsTab
+            bills={sim.dailyBills}
           />
         )}
       </div>
