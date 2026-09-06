@@ -411,8 +411,6 @@ export function useSimulation(params: SimParams = DEFAULT_PARAMS) {
       }
     }
 
-    if (pluggedIn !== isEvPluggedIn) setIsEvPluggedIn(pluggedIn);
-
     const nextEvSoc        = Math.min(100, Math.max(0, currentEvSoc       + (netEvPower           * interval_h / evCapacityKwh)        * 100));
     const nextHomeBattSoc  = Math.min(100, Math.max(0, currentHomeBattSoc + (netHomeBatteryPower   * interval_h / homeBatteryCapacityKwh) * 100));
 
