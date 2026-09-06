@@ -268,163 +268,146 @@ export function useSimulation(params: SimParams = DEFAULT_PARAMS) {
       grid_house: 0,  grid_ev: 0,  ev_house: 0,   ev_grid: 0, battery_house: 0
     };
 
-    let powerNeededByHouse = homeLoad;
+    let houseLoadRemaining = homeLoad;
+    let solarRemaining = solarPower;
     
-    // 1. Solar powers house first
-    const fromSolar = Math.min(powerNeededByHouse, solarPower);
-    currentFlows.solar_house = fromSolar;
-    powerNeededByHouse -= fromSolar;
-    intraDayStats.current.solarSavedCostRs += (fromSolar * interval_h) * buyRate;
+    // --- 1. SOLAR TO HOUSE ---
+    const solarToHouse = Math.min(houseLoadRemaining, solarRemaining);
+    currentFlows.solar_house = solarToHouse;
+    houseLoadRemaining -= solarToHouse;
+    solarRemaining -= solarToHouse;
+    intraDayStats.current.solarSavedCostRs += (solarToHouse * interval_h) * buyRate;
 
-    let currentHomeBattSoc = homeBatterySoc;
-    let currentEvSoc       = evSoc;
-
-    // 2. Home battery powers house if needed
-    if (powerNeededByHouse > 0 && currentHomeBattSoc > 1) {
-      const fromBatt = Math.min(powerNeededByHouse, homeBatteryCapacityKwh * 0.5);
-      netHomeBatteryPower = -fromBatt;
-      currentFlows.battery_house = fromBatt;
-      powerNeededByHouse -= fromBatt;
+    // --- 2. HOME BATTERY TO HOUSE ---
+    const currentHomeBattSoc = homeBatterySoc;
+    if (houseLoadRemaining > 0 && currentHomeBattSoc > 1) {
+      const battAvailableEnergy = (currentHomeBattSoc / 100) * homeBatteryCapacityKwh;
+      const battAvailableKw = battAvailableEnergy / interval_h;
+      const maxDischargeRate = homeBatteryCapacityKwh * 0.5; // e.g. 5kW discharge limit
+      const battToHouse = Math.min(houseLoadRemaining, battAvailableKw, maxDischargeRate);
+      currentFlows.battery_house = battToHouse;
+      houseLoadRemaining -= battToHouse;
+      netHomeBatteryPower -= battToHouse;
     }
 
+    // --- 3. EV LOCATION & MOVEMENT ---
     const requiredRangeKm = minRangeKm + fixedBufferKm;
     const requiredSoc     = (requiredRangeKm / evMaxRangeKm) * 100;
-    const commuteKm = 30; // 15km each way
-    const commuteKwhPerHour = (commuteKm * consumptionWhPerKm / 1000);
+    const currentEvSoc    = evSoc;
 
-    let pluggedIn = isEvPluggedIn;
-
-    // 3. Realistic EV Commute logic
+    let isAtHome = true;
     let isCommuting = false;
     let currentCommuteKmPerHour = 0;
     
     if (!f.isWeekend) {
-      // Weekday Commute (8am-9am and 5pm-6pm)
-      if (hour >= 8 && hour < 9) {
-        isCommuting = true;
-        currentCommuteKmPerHour = 15 * f.commute;
-      } else if (hour >= 17 && hour < 18) {
-        isCommuting = true;
-        currentCommuteKmPerHour = 15 * f.commute;
-      } else if (hour >= 9 && hour < 17 && !gridIsDown && v2gCapable && !isManualV2H) {
-        // Automatic V2G at office if surplus SOC
-        pluggedIn = false; // "At office" physically away from home, but assume office supports V2G export
-        if (currentEvSoc > requiredSoc + 1) {
-          chargerMode = 'V2G Export';
-          const surplusSoc = currentEvSoc - requiredSoc;
-          const surplusKwh = (surplusSoc / 100) * evCapacityKwh;
-          const dischargePower = Math.min(v2gRateKw, surplusKwh / interval_h);
-          netEvPower = -dischargePower;
-          currentFlows.ev_grid = dischargePower;
-          gridPower -= dischargePower;
-          intraDayStats.current.v2gExportKwh += dischargePower * interval_h;
-          intraDayStats.current.v2gEarningsRs += (dischargePower * interval_h) * sellRate;
-        }
-      }
+      if (hour >= 8 && hour < 9) { isCommuting = true; isAtHome = false; currentCommuteKmPerHour = 15 * f.commute; }
+      else if (hour >= 17 && hour < 18) { isCommuting = true; isAtHome = false; currentCommuteKmPerHour = 15 * f.commute; }
+      else if (hour >= 9 && hour < 17) { isAtHome = false; }
     } else {
-      // Weekend Errand
       if (hour >= f.errandHour && minuteOfDay < (f.errandHour * 60 + f.errandDuration)) {
-        isCommuting = true;
-        // Total weekend errand is 20km, distribute over duration
-        const errandHours = f.errandDuration / 60;
-        currentCommuteKmPerHour = 20 / errandHours;
+        isCommuting = true; isAtHome = false;
+        currentCommuteKmPerHour = 20 / (f.errandDuration / 60);
       }
     }
 
+    // --- 4. EV POWER LOGIC ---
     if (isCommuting) {
-      const commuteKwhPerHour = (currentCommuteKmPerHour * consumptionWhPerKm / 1000);
-      netEvPower = -commuteKwhPerHour;
       chargerMode = f.isWeekend ? 'Weekend Errand' : 'Driving (Commute)';
-      pluggedIn = false;
+      netEvPower = -(currentCommuteKmPerHour * consumptionWhPerKm / 1000);
       intraDayStats.current.totalKmDriven += currentCommuteKmPerHour * interval_h;
-    } else if (hour === 18 && minuteOfDay === 18 * 60) {
-      pluggedIn = true;
+      setIsEvPluggedIn(false);
+    } 
+    else if (!isAtHome) {
+      setIsEvPluggedIn(false); // At Office
+      if (!gridIsDown && v2gCapable && !isManualV2H && currentEvSoc > requiredSoc + 1) {
+        chargerMode = 'V2G Export (Office)';
+        const surplusSoc = currentEvSoc - requiredSoc;
+        const surplusKw = (surplusSoc / 100) * evCapacityKwh / interval_h;
+        const discharge = Math.min(v2gRateKw, surplusKw);
+        netEvPower = -discharge;
+        currentFlows.ev_grid = discharge;
+        gridPower -= discharge;
+        intraDayStats.current.v2gExportKwh += discharge * interval_h;
+        intraDayStats.current.v2gEarningsRs += (discharge * interval_h) * sellRate;
+      } else {
+        chargerMode = 'Parked (Office)';
+      }
+    }
+    else {
+      setIsEvPluggedIn(true); // At Home
       chargerMode = 'Plugged In (Idle)';
+      
+      // V2H Check
+      const wantsV2H = isManualV2H || gridIsDown;
+      if (wantsV2H && v2gCapable && currentEvSoc > requiredSoc + 1 && houseLoadRemaining > 0) {
+        chargerMode = gridIsDown ? 'EMERGENCY V2H' : 'Manual V2H Active';
+        const surplusSoc = currentEvSoc - requiredSoc;
+        const surplusKw = (surplusSoc / 100) * evCapacityKwh / interval_h;
+        const evToHouse = Math.min(houseLoadRemaining, v2gRateKw, surplusKw);
+        netEvPower = -evToHouse;
+        currentFlows.ev_house = evToHouse;
+        houseLoadRemaining -= evToHouse;
+        
+        intraDayStats.current.v2hUsedKwh += evToHouse * interval_h;
+        intraDayStats.current.v2hSavedCostRs += (evToHouse * interval_h) * buyRate;
+      }
+      
+      // Night Charging (if not V2H, Grid is UP)
+      if (!gridIsDown && !isManualV2H && (hour >= 22 || hour < 5) && currentEvSoc < 100 && netEvPower === 0) {
+        const missingSoc = 100 - currentEvSoc;
+        const missingKw = (missingSoc / 100) * evCapacityKwh / interval_h;
+        const chargeKw = Math.min(chargeRateKw, missingKw);
+        netEvPower = chargeKw;
+        currentFlows.grid_ev = chargeKw;
+        gridPower += chargeKw;
+        chargerMode = 'Night Charging';
+        
+        intraDayStats.current.totalGridKwh += chargeKw * interval_h;
+        intraDayStats.current.totalGridCostRs += (chargeKw * interval_h) * buyRate;
+        intraDayStats.current.evChargingCostRs += (chargeKw * interval_h) * buyRate;
+      }
     }
 
-    // 4. EV Plugged in at home logic
-    if (pluggedIn) {
-      // Manual V2H OR Grid Down Emergency V2H
-      const wantsV2H = isManualV2H || gridIsDown;
-      
-      if (wantsV2H && v2gCapable) {
-        const isTotalBlackout = gridIsDown && currentHomeBattSoc <= 1 && solarPower < 0.1;
-        if (currentEvSoc > requiredSoc && powerNeededByHouse > 0) {
-          chargerMode = gridIsDown ? 'EMERGENCY V2H' : 'Manual V2H Active';
-          const surplusSoc  = currentEvSoc - requiredSoc;
-          const surplusKwh  = (surplusSoc / 100) * evCapacityKwh;
-          const fromEv      = Math.min(powerNeededByHouse, v2gRateKw, surplusKwh / interval_h);
-          
-          netEvPower        = -fromEv;
-          currentFlows.ev_house  = fromEv;
-          powerNeededByHouse -= fromEv;
-          
-          const kwhUsed = fromEv * interval_h;
-          intraDayStats.current.v2hUsedKwh += kwhUsed;
-          intraDayStats.current.v2hSavedCostRs += kwhUsed * buyRate; // Saved from buying grid power
-        }
-        if (gridIsDown && powerNeededByHouse > 0) chargerMode = 'BLACKOUT';
-        if (gridIsDown && powerNeededByHouse === 0 && currentFlows.ev_house === 0) chargerMode = 'Grid Down (Batt OK)';
-      } 
-      
-      // Grid supplies remaining house load
-      if (!gridIsDown && powerNeededByHouse > 0) {
-        gridPower += powerNeededByHouse;
-        currentFlows.grid_house = powerNeededByHouse;
-        intraDayStats.current.totalGridKwh += powerNeededByHouse * interval_h;
-        intraDayStats.current.totalGridCostRs += (powerNeededByHouse * interval_h) * buyRate;
+    // --- 5. GRID COVERS REMAINING HOUSE LOAD ---
+    if (houseLoadRemaining > 0) {
+      if (!gridIsDown) {
+        currentFlows.grid_house = houseLoadRemaining;
+        gridPower += houseLoadRemaining;
+        intraDayStats.current.totalGridKwh += houseLoadRemaining * interval_h;
+        intraDayStats.current.totalGridCostRs += (houseLoadRemaining * interval_h) * buyRate;
+        houseLoadRemaining = 0;
+      } else {
+        if (chargerMode !== 'EMERGENCY V2H') chargerMode = 'BLACKOUT';
       }
+    }
 
-      // Grid Charging EV (Night time or TOU optimized)
-      if (!gridIsDown && !isManualV2H && (hour >= 22 || hour < 5)) {
-        if (currentEvSoc < 100) {
-          netEvPower = chargeRateKw;
-          chargerMode = 'Night Charging';
-          currentFlows.grid_ev = chargeRateKw;
-          gridPower += chargeRateKw;
-          const chargeKwh = chargeRateKw * interval_h;
-          intraDayStats.current.totalGridKwh += chargeKwh;
-          intraDayStats.current.totalGridCostRs += chargeKwh * buyRate;
-          intraDayStats.current.evChargingCostRs += chargeKwh * buyRate;
-        }
-      }
-
-      // Solar Surplus logic
-      let surplusSolar = solarPower - currentFlows.solar_house;
-      if (surplusSolar > 0) {
-        // Charge home battery
-        if (currentHomeBattSoc < 100) {
-          const toBatt = Math.min(surplusSolar, homeBatteryCapacityKwh * 0.5);
-          netHomeBatteryPower += toBatt;
-          currentFlows.solar_battery = toBatt;
-          surplusSolar -= toBatt;
-        }
-        // Charge EV
-        if (surplusSolar > 0 && currentEvSoc < 100) {
-          const toEv = Math.min(surplusSolar, chargeRateKw);
-          netEvPower += toEv;
-          currentFlows.solar_ev = toEv;
-          chargerMode = 'Solar Charging';
-        }
-        // Export rest to grid
-        if (surplusSolar > 0 && !gridIsDown) {
-          gridPower -= surplusSolar;
-          intraDayStats.current.v2gEarningsRs += (surplusSolar * interval_h) * sellRate;
-        }
-      }
-    } else if (!pluggedIn && (hour < 8 || hour > 18)) {
-      chargerMode = 'Idle (Unplugged)';
-      if (!gridIsDown && powerNeededByHouse > 0) {
-        gridPower += powerNeededByHouse;
-        currentFlows.grid_house = powerNeededByHouse;
-        intraDayStats.current.totalGridKwh += powerNeededByHouse * interval_h;
-        intraDayStats.current.totalGridCostRs += (powerNeededByHouse * interval_h) * buyRate;
-      }
-      let surplusSolar = solarPower - currentFlows.solar_house;
-      if (surplusSolar > 0 && currentHomeBattSoc < 100) {
-        const toBatt = Math.min(surplusSolar, homeBatteryCapacityKwh * 0.5);
+    // --- 6. EXCESS SOLAR ALLOCATION ---
+    if (solarRemaining > 0) {
+      // a) Home Battery
+      if (currentHomeBattSoc < 100) {
+        const spaceEnergy = (1 - currentHomeBattSoc / 100) * homeBatteryCapacityKwh;
+        const spaceKw = spaceEnergy / interval_h;
+        const maxChargeKw = homeBatteryCapacityKwh * 0.5;
+        const toBatt = Math.min(solarRemaining, spaceKw, maxChargeKw);
         netHomeBatteryPower += toBatt;
         currentFlows.solar_battery = toBatt;
+        solarRemaining -= toBatt;
+      }
+      // b) EV Charging
+      if (solarRemaining > 0 && isAtHome && currentEvSoc < 100 && netEvPower <= 0) {
+        const missingSoc = 100 - currentEvSoc;
+        const missingKw = (missingSoc / 100) * evCapacityKwh / interval_h;
+        const evSpaceKw = Math.max(0, chargeRateKw - netEvPower);
+        const toEv = Math.min(solarRemaining, missingKw, evSpaceKw);
+        netEvPower += toEv;
+        currentFlows.solar_ev = toEv;
+        solarRemaining -= toEv;
+        chargerMode = 'Solar Charging';
+      }
+      // c) Grid Export
+      if (solarRemaining > 0 && !gridIsDown) {
+        gridPower -= solarRemaining;
+        intraDayStats.current.v2gEarningsRs += (solarRemaining * interval_h) * sellRate;
       }
     }
 
