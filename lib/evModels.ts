@@ -1,20 +1,16 @@
 /**
  * Global EV & PHEV Model Database — V2G / Bidirectional Capable Only
  *
- * ALL vehicles in this database support V2G (Vehicle-to-Grid), V2H (Vehicle-to-Home),
- * or confirmed bidirectional charging via ISO 15118, CHAdeMO V2G, or proprietary protocols.
+ * ALL vehicles in this database have VERIFIED V2G (Vehicle-to-Grid) or V2H (Vehicle-to-Home)
+ * capabilities. Vehicles that only support V2L (Vehicle-to-Load / powering appliances) 
+ * such as the MG Windsor EV, BYD Seal, or BMW iX have been strictly excluded.
  *
  * Sources:
- *   - ev-database.org (usable kWh, WLTP range, consumption Wh/km)
- *   - Manufacturer official spec sheets (Q3 2025)
+ *   - Manufacturer official V2G/V2H press releases (GM Energy, Ford Backup Power, Mobilize)
  *   - SAE J3068 / CHAdeMO V2G certification lists
- *   - InsideEVs, Electrek V2G capability confirmations
+ *   - VW SW 3.5+ release notes (DC V2H support)
  *
  * Degradation factors from: Naumann et al. (2020), Astaneh et al. (2021)
- *   LFP: 0.75× (slowest fade, BYD Blade Cell)
- *   NMC: 1.00× (baseline)
- *   NCA: 0.90× (Tesla-optimised thermal management)
- *   NMCA: 0.90× (next-gen NMC, improved Al-doping)
  */
 
 export interface EVModel {
@@ -23,8 +19,8 @@ export interface EVModel {
   model:               string;
   year:                number;
   region:              string;
-  batteryKwh:          number;    // Usable (EV portion for PHEVs)
-  rangeKm:             number;    // WLTP EV-only range
+  batteryKwh:          number;    // Usable capacity
+  rangeKm:             number;    // WLTP / EPA EV-only range
   chargeRateKw:        number;    // Max AC Level-2 charge rate (kW)
   dcChargeRateKw:      number;    // Max DC fast-charge rate (kW)
   v2gCapable:          boolean;   // True = bidirectional V2G/V2H confirmed
@@ -38,61 +34,13 @@ export interface EVModel {
   flag:                string;    // Region emoji flag
   isPHEV?:             boolean;   // True for plug-in hybrids
   totalRangeKm?:       number;    // PHEV total range (EV + ICE)
-  v2gProtocol?:        string;    // e.g. 'ISO 15118', 'CHAdeMO V2G', 'Powershare'
+  v2gProtocol?:        string;    // Specific bidirectional hardware/software ecosystem
 }
 
 export const EV_MODELS: EVModel[] = [
 
   // ═══════════════════════════════════════════════════════════════════
-  // INDIA — All V2G confirmed
-  // ═══════════════════════════════════════════════════════════════════
-  {
-    id: 'mg_windsor_ev',
-    brand: 'MG', model: 'Windsor EV', year: 2024,
-    region: 'India', batteryKwh: 38.0, rangeKm: 332,
-    chargeRateKw: 6.6, dcChargeRateKw: 40,
-    v2gCapable: true, v2gRateKw: 3.3,
-    consumptionWhPerKm: 114, chemistry: 'LFP',
-    degradationFactor: 0.75, warrantyYears: 8, warrantyKm: 150000,
-    color: '#FF6600', flag: '🇮🇳',
-    v2gProtocol: 'MG V2L/V2H (CHAdeMO)'
-  },
-  {
-    id: 'hyundai_ioniq5',
-    brand: 'Hyundai', model: 'IONIQ 5 AWD', year: 2024,
-    region: 'India', batteryKwh: 72.6, rangeKm: 481,
-    chargeRateKw: 11, dcChargeRateKw: 220,
-    v2gCapable: true, v2gRateKw: 3.6,
-    consumptionWhPerKm: 154, chemistry: 'NMC',
-    degradationFactor: 0.90, warrantyYears: 8, warrantyKm: 160000,
-    color: '#0F4C81', flag: '🇮🇳',
-    v2gProtocol: 'ISO 15118 V2G (800V E-GMP)'
-  },
-  {
-    id: 'hyundai_ioniq6',
-    brand: 'Hyundai', model: 'IONIQ 6 RWD', year: 2024,
-    region: 'India', batteryKwh: 77.4, rangeKm: 614,
-    chargeRateKw: 11, dcChargeRateKw: 350,
-    v2gCapable: true, v2gRateKw: 3.6,
-    consumptionWhPerKm: 145, chemistry: 'NMC',
-    degradationFactor: 0.90, warrantyYears: 8, warrantyKm: 160000,
-    color: '#1B5FA4', flag: '🇮🇳',
-    v2gProtocol: 'ISO 15118 V2G (800V E-GMP)'
-  },
-  {
-    id: 'byd_seal_india',
-    brand: 'BYD', model: 'Seal AWD (India)', year: 2024,
-    region: 'India', batteryKwh: 82.56, rangeKm: 570,
-    chargeRateKw: 11, dcChargeRateKw: 150,
-    v2gCapable: true, v2gRateKw: 6.0,
-    consumptionWhPerKm: 158, chemistry: 'LFP',
-    degradationFactor: 0.75, warrantyYears: 8, warrantyKm: 150000,
-    color: '#1DB954', flag: '🇮🇳',
-    v2gProtocol: 'BYD DiLink V2G (Blade LFP)'
-  },
-
-  // ═══════════════════════════════════════════════════════════════════
-  // USA — All V2G / V2H confirmed
+  // USA — GM Energy, Ford Backup Power, Tesla Powershare
   // ═══════════════════════════════════════════════════════════════════
   {
     id: 'ford_f150_lightning',
@@ -106,6 +54,39 @@ export const EV_MODELS: EVModel[] = [
     v2gProtocol: 'Ford Intelligent Backup Power (V2H/V2G)'
   },
   {
+    id: 'gmc_silverado_ev',
+    brand: 'Chevrolet', model: 'Silverado EV RST', year: 2024,
+    region: 'USA', batteryKwh: 200, rangeKm: 724,
+    chargeRateKw: 19.2, dcChargeRateKw: 350,
+    v2gCapable: true, v2gRateKw: 10.2,
+    consumptionWhPerKm: 276, chemistry: 'NMC',
+    degradationFactor: 1.0, warrantyYears: 8, warrantyKm: 160000,
+    color: '#C8102E', flag: '🇺🇸',
+    v2gProtocol: 'GM Energy (Ultium V2H)'
+  },
+  {
+    id: 'chevrolet_blazer_ev',
+    brand: 'Chevrolet', model: 'Blazer EV RS', year: 2024,
+    region: 'USA', batteryKwh: 85, rangeKm: 449,
+    chargeRateKw: 11.5, dcChargeRateKw: 150,
+    v2gCapable: true, v2gRateKw: 9.6,
+    consumptionWhPerKm: 189, chemistry: 'NMC',
+    degradationFactor: 1.0, warrantyYears: 8, warrantyKm: 160000,
+    color: '#F2A900', flag: '🇺🇸',
+    v2gProtocol: 'GM Energy (Ultium V2H)'
+  },
+  {
+    id: 'honda_prologue',
+    brand: 'Honda', model: 'Prologue Elite', year: 2024,
+    region: 'USA', batteryKwh: 85, rangeKm: 439,
+    chargeRateKw: 11.5, dcChargeRateKw: 155,
+    v2gCapable: true, v2gRateKw: 9.6,
+    consumptionWhPerKm: 193, chemistry: 'NMC',
+    degradationFactor: 1.0, warrantyYears: 8, warrantyKm: 160000,
+    color: '#E4002B', flag: '🇺🇸',
+    v2gProtocol: 'GM Energy (Ultium Platform V2H)'
+  },
+  {
     id: 'tesla_cybertruck_dm',
     brand: 'Tesla', model: 'Cybertruck Dual Motor AWD', year: 2024,
     region: 'USA', batteryKwh: 123, rangeKm: 565,
@@ -114,33 +95,33 @@ export const EV_MODELS: EVModel[] = [
     consumptionWhPerKm: 240, chemistry: 'NMC',
     degradationFactor: 0.90, warrantyYears: 8, warrantyKm: 192000,
     color: '#CC0000', flag: '🇺🇸',
-    v2gProtocol: 'Tesla Powershare (V2H/V2G — 11.5 kW)'
+    v2gProtocol: 'Tesla Powershare (V2H/V2G)'
+  },
+  {
+    id: 'lucid_air_gt',
+    brand: 'Lucid', model: 'Air Grand Touring', year: 2024,
+    region: 'USA', batteryKwh: 112, rangeKm: 830,
+    chargeRateKw: 19.2, dcChargeRateKw: 300,
+    v2gCapable: true, v2gRateKw: 9.6,
+    consumptionWhPerKm: 135, chemistry: 'NMC',
+    degradationFactor: 0.95, warrantyYears: 8, warrantyKm: 160000,
+    color: '#000000', flag: '🇺🇸',
+    v2gProtocol: 'Lucid Range Exchange (V2H)'
   },
   {
     id: 'rivian_r1t',
     brand: 'Rivian', model: 'R1T Max Pack', year: 2024,
-    region: 'USA', batteryKwh: 149, rangeKm: 515,
+    region: 'USA', batteryKwh: 149, rangeKm: 643,
     chargeRateKw: 11.5, dcChargeRateKw: 220,
     v2gCapable: true, v2gRateKw: 7.2,
     consumptionWhPerKm: 289, chemistry: 'NMC',
     degradationFactor: 1.0, warrantyYears: 8, warrantyKm: 160000,
     color: '#00B140', flag: '🇺🇸',
-    v2gProtocol: 'Rivian V2H (SAE J3068)'
-  },
-  {
-    id: 'gmc_silverado_ev',
-    brand: 'GMC', model: 'Silverado EV RST', year: 2024,
-    region: 'USA', batteryKwh: 200, rangeKm: 724,
-    chargeRateKw: 19.2, dcChargeRateKw: 350,
-    v2gCapable: true, v2gRateKw: 10.2,
-    consumptionWhPerKm: 276, chemistry: 'NMC',
-    degradationFactor: 1.0, warrantyYears: 8, warrantyKm: 160000,
-    color: '#C8102E', flag: '🇺🇸',
-    v2gProtocol: 'GM Energy Intelligent Backup Power (V2H/V2G)'
+    v2gProtocol: 'Rivian V2H (SAE J3068 via OTA)'
   },
 
   // ═══════════════════════════════════════════════════════════════════
-  // EUROPE — All V2G confirmed
+  // EUROPE — VW MEB Software 3.5+ and Renault Mobilize
   // ═══════════════════════════════════════════════════════════════════
   {
     id: 'volvo_ex90',
@@ -151,7 +132,7 @@ export const EV_MODELS: EVModel[] = [
     consumptionWhPerKm: 175, chemistry: 'NMC',
     degradationFactor: 0.90, warrantyYears: 8, warrantyKm: 160000,
     color: '#002D62', flag: '🇸🇪',
-    v2gProtocol: 'ISO 15118-20 V2G (800V)'
+    v2gProtocol: 'ISO 15118-20 V2G'
   },
   {
     id: 'polestar_3',
@@ -165,135 +146,138 @@ export const EV_MODELS: EVModel[] = [
     v2gProtocol: 'ISO 15118-20 V2G'
   },
   {
-    id: 'bmw_ix_xdrive50',
-    brand: 'BMW', model: 'iX xDrive50', year: 2024,
-    region: 'Europe', batteryKwh: 105.2, rangeKm: 630,
-    chargeRateKw: 11, dcChargeRateKw: 200,
+    id: 'renault_5_etech',
+    brand: 'Renault', model: '5 E-Tech 52kWh', year: 2024,
+    region: 'Europe', batteryKwh: 52, rangeKm: 400,
+    chargeRateKw: 11, dcChargeRateKw: 100,
     v2gCapable: true, v2gRateKw: 11.0,
-    consumptionWhPerKm: 180, chemistry: 'NMCA',
-    degradationFactor: 0.90, warrantyYears: 8, warrantyKm: 160000,
-    color: '#1C69D4', flag: '🇩🇪',
-    v2gProtocol: 'BMW V2H (ISO 15118-2)'
+    consumptionWhPerKm: 130, chemistry: 'NMC',
+    degradationFactor: 1.0, warrantyYears: 8, warrantyKm: 160000,
+    color: '#EFDF00', flag: '🇫🇷',
+    v2gProtocol: 'Mobilize V2G (Onboard Bidirectional AC)'
   },
   {
     id: 'renault_scenic_etech',
-    brand: 'Renault', model: 'Scenic E-Tech 220hp', year: 2024,
+    brand: 'Renault', model: 'Scenic E-Tech 87kWh', year: 2024,
     region: 'Europe', batteryKwh: 87, rangeKm: 620,
     chargeRateKw: 22, dcChargeRateKw: 150,
     v2gCapable: true, v2gRateKw: 11.0,
     consumptionWhPerKm: 155, chemistry: 'NMC',
     degradationFactor: 0.95, warrantyYears: 8, warrantyKm: 160000,
     color: '#EFDF00', flag: '🇫🇷',
-    v2gProtocol: 'ISO 15118 V2G (via Wallbox Quasar 2)'
+    v2gProtocol: 'Mobilize V2G (Onboard Bidirectional AC)'
+  },
+  {
+    id: 'vw_id4_pro',
+    brand: 'Volkswagen', model: 'ID.4 Pro', year: 2024,
+    region: 'Europe', batteryKwh: 77, rangeKm: 550,
+    chargeRateKw: 11, dcChargeRateKw: 135,
+    v2gCapable: true, v2gRateKw: 10.0,
+    consumptionWhPerKm: 167, chemistry: 'NMC',
+    degradationFactor: 0.95, warrantyYears: 8, warrantyKm: 160000,
+    color: '#009DE0', flag: '🇩🇪',
+    v2gProtocol: 'VW DC V2H (Requires SW 3.5+ & E3/DC Home Station)'
+  },
+  {
+    id: 'vw_id_buzz',
+    brand: 'Volkswagen', model: 'ID.Buzz Pro', year: 2024,
+    region: 'Europe', batteryKwh: 77, rangeKm: 415,
+    chargeRateKw: 11, dcChargeRateKw: 170,
+    v2gCapable: true, v2gRateKw: 10.0,
+    consumptionWhPerKm: 208, chemistry: 'NMC',
+    degradationFactor: 0.95, warrantyYears: 8, warrantyKm: 160000,
+    color: '#009DE0', flag: '🇩🇪',
+    v2gProtocol: 'VW DC V2H (Requires SW 3.5+ & E3/DC Home Station)'
+  },
+  {
+    id: 'skoda_enyaq_85',
+    brand: 'Skoda', model: 'Enyaq 85', year: 2024,
+    region: 'Europe', batteryKwh: 77, rangeKm: 560,
+    chargeRateKw: 11, dcChargeRateKw: 135,
+    v2gCapable: true, v2gRateKw: 10.0,
+    consumptionWhPerKm: 155, chemistry: 'NMC',
+    degradationFactor: 0.95, warrantyYears: 8, warrantyKm: 160000,
+    color: '#4BA82E', flag: '🇨🇿',
+    v2gProtocol: 'VW MEB DC V2H (Requires SW 3.5+)'
+  },
+  {
+    id: 'cupra_born',
+    brand: 'Cupra', model: 'Born 77kWh', year: 2024,
+    region: 'Europe', batteryKwh: 77, rangeKm: 550,
+    chargeRateKw: 11, dcChargeRateKw: 170,
+    v2gCapable: true, v2gRateKw: 10.0,
+    consumptionWhPerKm: 158, chemistry: 'NMC',
+    degradationFactor: 0.95, warrantyYears: 8, warrantyKm: 160000,
+    color: '#B3A18F', flag: '🇪🇸',
+    v2gProtocol: 'VW MEB DC V2H (Requires SW 3.5+)'
   },
 
   // ═══════════════════════════════════════════════════════════════════
-  // CHINA — All V2G confirmed
+  // ASIA — E-GMP Quasar 2 and CHAdeMO Pioneers
   // ═══════════════════════════════════════════════════════════════════
   {
-    id: 'byd_seal',
-    brand: 'BYD', model: 'Seal AWD', year: 2024,
-    region: 'China', batteryKwh: 82.56, rangeKm: 650,
-    chargeRateKw: 11, dcChargeRateKw: 150,
-    v2gCapable: true, v2gRateKw: 6.0,
-    consumptionWhPerKm: 158, chemistry: 'LFP',
-    degradationFactor: 0.75, warrantyYears: 8, warrantyKm: 150000,
-    color: '#1DB954', flag: '🇨🇳',
-    v2gProtocol: 'BYD DiLink V2G (Blade Cell LFP)'
-  },
-  {
-    id: 'byd_han_ev',
-    brand: 'BYD', model: 'Han EV', year: 2024,
-    region: 'China', batteryKwh: 85.44, rangeKm: 715,
-    chargeRateKw: 11, dcChargeRateKw: 120,
-    v2gCapable: true, v2gRateKw: 6.0,
-    consumptionWhPerKm: 145, chemistry: 'LFP',
-    degradationFactor: 0.75, warrantyYears: 8, warrantyKm: 150000,
-    color: '#008080', flag: '🇨🇳',
-    v2gProtocol: 'BYD DiLink V2G (Blade Cell LFP)'
-  },
-  {
-    id: 'byd_sealion7',
-    brand: 'BYD', model: 'Sealion 7 AWD', year: 2024,
-    region: 'China', batteryKwh: 82.56, rangeKm: 450,
-    chargeRateKw: 11, dcChargeRateKw: 150,
-    v2gCapable: true, v2gRateKw: 6.0,
-    consumptionWhPerKm: 183, chemistry: 'LFP',
-    degradationFactor: 0.75, warrantyYears: 8, warrantyKm: 150000,
-    color: '#005BAC', flag: '🇨🇳',
-    v2gProtocol: 'BYD DiLink V2G (Blade Cell LFP)'
-  },
-  {
-    id: 'zeekr_001',
-    brand: 'Zeekr', model: '001 Long Range', year: 2024,
-    region: 'China', batteryKwh: 100, rangeKm: 580,
-    chargeRateKw: 11, dcChargeRateKw: 200,
+    id: 'hyundai_ioniq5',
+    brand: 'Hyundai', model: 'IONIQ 5 AWD', year: 2024,
+    region: 'Korea', batteryKwh: 77.4, rangeKm: 481,
+    chargeRateKw: 11, dcChargeRateKw: 220,
     v2gCapable: true, v2gRateKw: 7.4,
-    consumptionWhPerKm: 172, chemistry: 'LFP',
-    degradationFactor: 0.75, warrantyYears: 8, warrantyKm: 200000,
-    color: '#4B0082', flag: '🇨🇳',
-    v2gProtocol: 'ISO 15118 V2G (CATL Qilin LFP)'
-  },
-
-  // ═══════════════════════════════════════════════════════════════════
-  // KOREA — All V2G confirmed (E-GMP platform)
-  // ═══════════════════════════════════════════════════════════════════
-  {
-    id: 'kia_ev6_gt',
-    brand: 'Kia', model: 'EV6 GT', year: 2024,
-    region: 'Korea', batteryKwh: 77.4, rangeKm: 424,
-    chargeRateKw: 11, dcChargeRateKw: 350,
-    v2gCapable: true, v2gRateKw: 3.6,
-    consumptionWhPerKm: 203, chemistry: 'NMC',
+    consumptionWhPerKm: 170, chemistry: 'NMC',
     degradationFactor: 0.90, warrantyYears: 8, warrantyKm: 160000,
-    color: '#05141F', flag: '🇰🇷',
-    v2gProtocol: 'ISO 15118 V2G (800V E-GMP)'
+    color: '#0F4C81', flag: '🇰🇷',
+    v2gProtocol: 'E-GMP V2H (via Wallbox Quasar 2)'
   },
   {
     id: 'kia_ev9_lr',
     brand: 'Kia', model: 'EV9 Long Range AWD', year: 2024,
     region: 'Korea', batteryKwh: 99.8, rangeKm: 541,
     chargeRateKw: 11, dcChargeRateKw: 350,
-    v2gCapable: true, v2gRateKw: 3.6,
+    v2gCapable: true, v2gRateKw: 7.4,
     consumptionWhPerKm: 185, chemistry: 'NMC',
     degradationFactor: 0.90, warrantyYears: 8, warrantyKm: 160000,
     color: '#7B3F00', flag: '🇰🇷',
-    v2gProtocol: 'ISO 15118 V2G (800V E-GMP) + Wallbox Quasar 2'
+    v2gProtocol: 'E-GMP V2H (via Wallbox Quasar 2)'
   },
-
-  // ═══════════════════════════════════════════════════════════════════
-  // JAPAN — V2G pioneers via CHAdeMO V2G standard
-  // ═══════════════════════════════════════════════════════════════════
   {
     id: 'nissan_leaf_plus',
     brand: 'Nissan', model: 'Leaf e+ 62kWh', year: 2024,
     region: 'Japan', batteryKwh: 62, rangeKm: 385,
-    chargeRateKw: 6.6, dcChargeRateKw: 50,
+    chargeRateKw: 6.6, dcChargeRateKw: 100,
     v2gCapable: true, v2gRateKw: 6.0,
     consumptionWhPerKm: 161, chemistry: 'NMC',
     degradationFactor: 1.05, warrantyYears: 8, warrantyKm: 160000,
     color: '#C3002F', flag: '🇯🇵',
-    v2gProtocol: 'CHAdeMO V2G (first mass-market V2G standard)'
+    v2gProtocol: 'CHAdeMO V2G (The original V2G standard)'
   },
   {
-    // PHEV — battery kWh & rangeKm refer to EV-only mode
     id: 'mitsubishi_outlander_phev',
     brand: 'Mitsubishi', model: 'Outlander PHEV', year: 2024,
-    region: 'Japan', batteryKwh: 17.0, rangeKm: 87,
+    region: 'Japan', batteryKwh: 20.0, rangeKm: 61,
     chargeRateKw: 6.6, dcChargeRateKw: 50,
     v2gCapable: true, v2gRateKw: 6.0,
-    consumptionWhPerKm: 195, chemistry: 'NMC',
+    consumptionWhPerKm: 220, chemistry: 'NMC',
     degradationFactor: 1.0, warrantyYears: 8, warrantyKm: 160000,
     color: '#D2042D', flag: '🇯🇵',
-    isPHEV: true, totalRangeKm: 680,
-    v2gProtocol: 'CHAdeMO V2G (PHEV pioneer — rated 6 kW export)'
+    isPHEV: true, totalRangeKm: 675,
+    v2gProtocol: 'CHAdeMO V2H (V2G capable)'
   },
+  {
+    id: 'mitsubishi_eclipse_cross_phev',
+    brand: 'Mitsubishi', model: 'Eclipse Cross PHEV', year: 2024,
+    region: 'Japan', batteryKwh: 13.8, rangeKm: 55,
+    chargeRateKw: 3.7, dcChargeRateKw: 22,
+    v2gCapable: true, v2gRateKw: 6.0,
+    consumptionWhPerKm: 210, chemistry: 'NMC',
+    degradationFactor: 1.0, warrantyYears: 8, warrantyKm: 160000,
+    color: '#D2042D', flag: '🇯🇵',
+    isPHEV: true, totalRangeKm: 650,
+    v2gProtocol: 'CHAdeMO V2H'
+  }
 ];
 
-// Default model — MG Windsor EV (India's first V2G-capable mass-market EV)
-export const DEFAULT_EV = EV_MODELS.find(m => m.id === 'mg_windsor_ev')!;
+// Default model — Nissan Leaf (Universally verified V2G capabilities globally)
+export const DEFAULT_EV = EV_MODELS.find(m => m.id === 'nissan_leaf_plus')!;
 
-// Chemistry-specific degradation info (Naumann 2020, Schimpe 2018)
+// Chemistry-specific degradation info
 export const CHEMISTRY_INFO: Record<string, { label: string; color: string; note: string }> = {
   NMC:  {
     label: 'NMC (Lithium Nickel Manganese Cobalt)',
@@ -301,19 +285,19 @@ export const CHEMISTRY_INFO: Record<string, { label: string; color: string; note
     note:  'Balanced energy density & cycle life. Baseline degradation model (K_cycle=0.00025, α=1.08).'
   },
   LFP:  {
-    label: 'LFP (Lithium Iron Phosphate — BYD Blade Cell)',
+    label: 'LFP (Lithium Iron Phosphate)',
     color: '#A3BE8C',
-    note:  '~25% longer cycle life than NMC. Thermally very stable. Safe to charge to 100% daily. Degradation factor 0.75×.'
+    note:  '~25% longer cycle life than NMC. Safe to charge to 100% daily. Degradation factor 0.75×.'
   },
   NCA:  {
-    label: 'NCA (Lithium Nickel Cobalt Aluminum — Tesla)',
+    label: 'NCA (Lithium Nickel Cobalt Aluminum)',
     color: '#EBCB8B',
-    note:  'Highest energy density. Tesla-specific thermal management reduces fade. Degradation factor 0.90×.'
+    note:  'Highest energy density. Thermal management reduces fade. Degradation factor 0.90×.'
   },
   NMCA: {
     label: 'NMCA (Next-gen NMC + Aluminium doping)',
     color: '#B48EAD',
-    note:  'Improved Al-doping reduces thermal runaway risk vs NMC. Used in BMW iX. Degradation factor 0.90×.'
+    note:  'Improved Al-doping reduces thermal runaway risk vs standard NMC. Degradation factor 0.90×.'
   },
 };
 

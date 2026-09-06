@@ -116,32 +116,29 @@ const COUNTRY_DATA: Record<string, CountryPrices> = {
 // Comparable ICE cars for each EV model ID
 // Mileage (km/L) and CO2 (g/km) from ARAI / WLTP / EPA test data
 export const ICE_COMPARABLES: Record<string, { name: string; mileageKmPerL: number; co2GPerKm: number }> = {
-  // India
-  'mg_windsor_ev':         { name: 'MG Astor 1.5L Turbo',        mileageKmPerL: 15.5, co2GPerKm: 158 },
-  'hyundai_ioniq5':        { name: 'Hyundai Tucson 2.0L',         mileageKmPerL: 13.8, co2GPerKm: 170 },
-  'hyundai_ioniq6':        { name: 'Hyundai Elantra 1.6T',        mileageKmPerL: 14.5, co2GPerKm: 156 },
-  'byd_seal_india':        { name: 'Toyota Camry 2.5L Hybrid',    mileageKmPerL: 19.0, co2GPerKm: 122 },
   // USA
-  'ford_f150_lightning':   { name: 'Ford F-150 3.5L EcoBoost',    mileageKmPerL: 8.9,  co2GPerKm: 320 },
-  'tesla_cybertruck_dm':   { name: 'RAM 1500 5.7L HEMI',          mileageKmPerL: 7.6,  co2GPerKm: 370 },
-  'rivian_r1t':            { name: 'Ford F-150 Raptor 3.5L',      mileageKmPerL: 9.1,  co2GPerKm: 295 },
-  'gmc_silverado_ev':      { name: 'Chevy Silverado 1500 5.3L',   mileageKmPerL: 9.8,  co2GPerKm: 290 },
+  'ford_f150_lightning':         { name: 'Ford F-150 3.5L EcoBoost',    mileageKmPerL: 8.9,  co2GPerKm: 320 },
+  'gmc_silverado_ev':            { name: 'Chevy Silverado 1500 5.3L',   mileageKmPerL: 9.8,  co2GPerKm: 290 },
+  'chevrolet_blazer_ev':         { name: 'Chevrolet Blazer 2.0T',       mileageKmPerL: 11.5, co2GPerKm: 210 },
+  'honda_prologue':              { name: 'Honda Passport 3.5L',         mileageKmPerL: 10.0, co2GPerKm: 240 },
+  'tesla_cybertruck_dm':         { name: 'RAM 1500 5.7L HEMI',          mileageKmPerL: 7.6,  co2GPerKm: 370 },
+  'lucid_air_gt':                { name: 'Mercedes S500 3.0T',          mileageKmPerL: 10.5, co2GPerKm: 225 },
+  'rivian_r1t':                  { name: 'Ford F-150 Raptor 3.5L',      mileageKmPerL: 9.1,  co2GPerKm: 295 },
   // Europe
-  'volvo_ex90':            { name: 'Volvo XC90 B5 Mild Hybrid',   mileageKmPerL: 12.5, co2GPerKm: 196 },
-  'polestar_3':            { name: 'Porsche Cayenne 3.0T',         mileageKmPerL: 11.0, co2GPerKm: 219 },
-  'bmw_ix_xdrive50':       { name: 'BMW X7 xDrive40i',            mileageKmPerL: 10.8, co2GPerKm: 225 },
-  'renault_scenic_etech':  { name: 'Renault Austral 1.3T',        mileageKmPerL: 15.0, co2GPerKm: 148 },
-  // China
-  'byd_seal':              { name: 'Toyota Camry 2.5L',           mileageKmPerL: 14.0, co2GPerKm: 165 },
-  'byd_han_ev':            { name: 'Audi A6 2.0 TFSI',            mileageKmPerL: 12.8, co2GPerKm: 178 },
-  'byd_sealion7':          { name: 'Toyota RAV4 2.5L Hybrid',     mileageKmPerL: 19.0, co2GPerKm: 120 },
-  'zeekr_001':             { name: 'Audi A7 Sportback 3.0 TFSI', mileageKmPerL: 11.2, co2GPerKm: 195 },
-  // Korea
-  'kia_ev6_gt':            { name: 'Kia Stinger GT 3.3T',         mileageKmPerL: 10.5, co2GPerKm: 226 },
-  'kia_ev9_lr':            { name: 'Kia Telluride 3.8L',          mileageKmPerL: 9.5,  co2GPerKm: 246 },
-  // Japan
-  'nissan_leaf_plus':      { name: 'Nissan Qashqai 1.5T',         mileageKmPerL: 13.5, co2GPerKm: 172 },
-  'mitsubishi_outlander_phev': { name: 'Mitsubishi Outlander 2.5L', mileageKmPerL: 13.0, co2GPerKm: 185 },
+  'volvo_ex90':                  { name: 'Volvo XC90 B5 Mild Hybrid',   mileageKmPerL: 12.5, co2GPerKm: 196 },
+  'polestar_3':                  { name: 'Porsche Cayenne 3.0T',         mileageKmPerL: 11.0, co2GPerKm: 219 },
+  'renault_5_etech':             { name: 'Renault Clio 1.0T',           mileageKmPerL: 18.0, co2GPerKm: 130 },
+  'renault_scenic_etech':        { name: 'Renault Austral 1.3T',        mileageKmPerL: 15.0, co2GPerKm: 148 },
+  'vw_id4_pro':                  { name: 'VW Tiguan 2.0 TSI',           mileageKmPerL: 12.5, co2GPerKm: 182 },
+  'vw_id_buzz':                  { name: 'VW Multivan 2.0 TSI',         mileageKmPerL: 11.5, co2GPerKm: 200 },
+  'skoda_enyaq_85':              { name: 'Skoda Kodiaq 2.0 TSI',        mileageKmPerL: 13.0, co2GPerKm: 175 },
+  'cupra_born':                  { name: 'VW Golf GTI 2.0T',            mileageKmPerL: 13.5, co2GPerKm: 168 },
+  // Asia
+  'hyundai_ioniq5':              { name: 'Hyundai Tucson 2.0L',         mileageKmPerL: 13.8, co2GPerKm: 170 },
+  'kia_ev9_lr':                  { name: 'Kia Telluride 3.8L',          mileageKmPerL: 9.5,  co2GPerKm: 246 },
+  'nissan_leaf_plus':            { name: 'Nissan Qashqai 1.5T',         mileageKmPerL: 13.5, co2GPerKm: 172 },
+  'mitsubishi_outlander_phev':   { name: 'Mitsubishi Outlander 2.5L',   mileageKmPerL: 13.0, co2GPerKm: 185 },
+  'mitsubishi_eclipse_cross_phev': { name: 'Mitsubishi Eclipse Cross 1.5T', mileageKmPerL: 13.5, co2GPerKm: 175 },
 };
 
 export async function GET(req: NextRequest) {
