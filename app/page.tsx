@@ -125,19 +125,29 @@ export default function Dashboard() {
     if (plannerTimerRef.current) clearTimeout(plannerTimerRef.current);
     plannerTimerRef.current = setTimeout(() => {
       const plan = generateDailyEstimation({
-        cityName: weather?.cityName ?? 'Lucknow',
-        weatherTemp, cloudCoverPct: cloudCover,
-        forecastTemps, forecastClouds, forecastDescriptions: forecastDescs,
-        evSoc: sim.evSoc, homeBatterySoc: sim.homeBatterySoc,
-        minRangeKm: sim.minRangeKm, evMaxRangeKm: sim.evMaxRangeKm,
-        batterySoh: degradation.soh,
-        gridIsDown: sim.gridIsDown, outages, maddpgSchedule,
+        cityName:            weather?.cityName ?? 'Lucknow',
+        weatherTemp,         cloudCoverPct: cloudCover,
+        forecastTemps,       forecastClouds,    forecastDescriptions: forecastDescs,
+        evSoc:               sim.evSoc,
+        homeBatterySoc:      sim.homeBatterySoc,
+        minRangeKm:          sim.minRangeKm,
+        evMaxRangeKm:        sim.evMaxRangeKm,
+        // ── EV model-specific params (REQUIRED for correct physics) ──────
+        evCapacityKwh:       selectedEV.batteryKwh,
+        chargeRateKw:        selectedEV.chargeRateKw,
+        consumptionWhPerKm:  selectedEV.consumptionWhPerKm,
+        v2gCapable:          selectedEV.v2gCapable,
+        // ─────────────────────────────────────────────────────────────────
+        batterySoh:          degradation.soh,
+        gridIsDown:          sim.gridIsDown,
+        outages,
+        maddpgSchedule,
       });
       setDailyEstimation(plan);
       setIsPlannerLoading(false);
     }, 1200);
     return () => { if (plannerTimerRef.current) clearTimeout(plannerTimerRef.current); };
-  }, [maddpgSchedule, weather?.cityName, weatherTemp, cloudCover]);
+  }, [maddpgSchedule, weather?.cityName, weatherTemp, cloudCover, selectedEV.id]);
 
   // Record habit when sim day completes — use EV-specific costs only
   const prevDay = useRef(1);
@@ -180,13 +190,20 @@ export default function Dashboard() {
     if (plannerTimerRef.current) clearTimeout(plannerTimerRef.current);
     plannerTimerRef.current = setTimeout(() => {
       const plan = generateDailyEstimation({
-        cityName: weather?.cityName ?? 'Lucknow',
-        weatherTemp, cloudCoverPct: cloudCover,
-        forecastTemps, forecastClouds, forecastDescriptions: forecastDescs,
-        evSoc: sim.evSoc, homeBatterySoc: sim.homeBatterySoc,
-        minRangeKm: sim.minRangeKm, evMaxRangeKm: sim.evMaxRangeKm,
-        batterySoh: degradation.soh, gridIsDown: sim.gridIsDown,
-        outages, maddpgSchedule,
+        cityName:            weather?.cityName ?? 'Lucknow',
+        weatherTemp,         cloudCoverPct: cloudCover,
+        forecastTemps,       forecastClouds,  forecastDescriptions: forecastDescs,
+        evSoc:               sim.evSoc,
+        homeBatterySoc:      sim.homeBatterySoc,
+        minRangeKm:          sim.minRangeKm,
+        evMaxRangeKm:        sim.evMaxRangeKm,
+        evCapacityKwh:       selectedEV.batteryKwh,
+        chargeRateKw:        selectedEV.chargeRateKw,
+        consumptionWhPerKm:  selectedEV.consumptionWhPerKm,
+        v2gCapable:          selectedEV.v2gCapable,
+        batterySoh:          degradation.soh,
+        gridIsDown:          sim.gridIsDown,
+        outages,             maddpgSchedule,
       });
       setDailyEstimation(plan);
       setIsPlannerLoading(false);
@@ -482,6 +499,7 @@ export default function Dashboard() {
             weather={weather}
             degradation={degradation}
             maddpgSchedule={maddpgSchedule}
+            selectedEV={selectedEV}
           />
         )}
       </div>

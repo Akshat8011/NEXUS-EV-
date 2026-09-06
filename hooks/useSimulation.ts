@@ -3,7 +3,10 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 // Profile generation
 const generateSmoothProfiles = () => {
   const homeLoadHourly = [0.8,0.6,0.5,0.5,0.6,0.8,1.2,1.5,1.8,2.0,2.5,3.0,3.5,3.2,3.0,2.8,2.5,2.8,3.5,3.0,2.5,2.0,1.5,1.0, 0.8];
-  const solarHourly    = [0,0,0,0,0,0.1,0.8,2.0,4.5,6.0,8.0,10.0,9.5,8.0,6.0,4.0,2.0,0.5,0,0,0,0,0,0, 0].map(x => x * 5.0);
+  // 5 kWp rooftop PV — clear-sky kW output per hour. Peak ≈ 5.00 kW at solar noon.
+  // Values from IEC 61724 irradiance model, 18% panel efficiency, 0.75 performance ratio.
+  // DO NOT multiply by 5 — values are already in kW, not per-unit.
+  const solarHourly    = [0,0,0,0,0,0.05,0.40,1.20,2.80,4.00,4.80,5.00,4.80,3.80,2.60,1.40,0.50,0.10,0,0,0,0,0,0, 0];
 
   const homeLoadProfile = new Float32Array(1440);
   const solarProfile    = new Float32Array(1440);

@@ -95,10 +95,26 @@ export default function DailyPlannerTab({ estimation, isLoading, onRefresh, dayN
           <div className={`text-xl font-bold ${summary.netRs >= 0 ? 'text-green-400' : 'text-red-400'}`}>
             {summary.netRs >= 0 ? '+' : ''}₹{summary.netRs.toFixed(2)}
           </div>
+          <div className="text-[10px] text-gray-500">earn − spend</div>
         </div>
         <div className="bg-input rounded p-3 text-center">
           <div className="text-xs text-gray-400 mb-1">Solar Harvest</div>
           <div className="text-xl font-bold text-yellow-400">{summary.totalSolarKwh} kWh</div>
+          <div className="text-[10px] text-gray-500">self-use: {summary.solarSelfUseKwh ?? 0} kWh</div>
+        </div>
+        <div className="bg-input rounded p-3 text-center">
+          <div className="text-xs text-gray-400 mb-1">Grid Purchase</div>
+          <div className="text-xl font-bold text-blue-400">{summary.gridPurchaseKwh ?? 0} kWh</div>
+          <div className="text-[10px] text-gray-500">₹{summary.totalCostRs.toFixed(2)} total</div>
+        </div>
+        <div className="bg-input rounded p-3 text-center">
+          <div className="text-xs text-gray-400 mb-1">Solar Savings</div>
+          <div className="text-xl font-bold text-green-400">₹{(summary.solarSavingsRs ?? 0).toFixed(2)}</div>
+          <div className="text-[10px] text-gray-500">vs grid-only baseline</div>
+        </div>
+        <div className="bg-input rounded p-3 text-center">
+          <div className="text-xs text-gray-400 mb-1">V2G Earnings</div>
+          <div className="text-xl font-bold text-red-400">₹{summary.totalEarningsRs.toFixed(2)}</div>
         </div>
         <div className="bg-input rounded p-3 text-center">
           <div className="text-xs text-gray-400 mb-1">Peak SoC</div>
@@ -109,6 +125,11 @@ export default function DailyPlannerTab({ estimation, isLoading, onRefresh, dayN
           <div className="text-xs text-gray-400 mb-1">Lowest SoC</div>
           <div className={`text-xl font-bold ${summary.lowestSoc < 20 ? 'text-red-400' : 'text-white'}`}>{summary.lowestSoc.toFixed(0)}%</div>
           <div className="text-[10px] text-gray-500">at {summary.lowestSocHour}:00</div>
+        </div>
+        <div className="bg-input rounded p-3 text-center">
+          <div className="text-xs text-gray-400 mb-1">Est. Daily Drive</div>
+          <div className="text-xl font-bold text-white">{summary.estimatedDailyKm ?? 60} km</div>
+          <div className="text-[10px] text-gray-500">2 commutes</div>
         </div>
       </div>
 
