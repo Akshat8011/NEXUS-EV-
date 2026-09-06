@@ -105,7 +105,7 @@ export default function Dashboard() {
         evMaxRangeKm:        sim.evMaxRangeKm,
         evCapacityKwh:       sim.evCapacityKwh,
         chargeRateKw:        selectedEV.chargeRateKw,           // ← model-specific AC charge rate
-        v2gRateKw:           selectedEV.v2gCapable ? 6.0 : 0,  // ← 0 if no V2G
+        v2gRateKw:           selectedEV.v2gRateKw ?? 0,         // ← model-specific V2G rate (kW)
         consumptionWhPerKm:  selectedEV.consumptionWhPerKm,    // ← model-specific consumption
         weatherTemp, cloudCoverPct: cloudCover,
         forecastTemps, forecastClouds,
