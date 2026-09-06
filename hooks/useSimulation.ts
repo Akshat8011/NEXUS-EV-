@@ -89,126 +89,61 @@ export function useSimulation(params: SimParams = DEFAULT_PARAMS) {
   const homeBatteryCapacityKwh = 10.0;
   
   // Real-time TOU rates
-  const getRate = (h: number) => {
-    if (h >= 18 && h <= 22) return { buy: 12.0, sell: 10.0 }; // Peak
-    if (h >= 10 && h <= 15) return { buy:  5.0, sell:  4.0 }; // Solar surplus hours
-    return { buy: 7.5, sell: 6.0 };                           // Off-peak
-  };
+    const getRate = (h: number) => {
+      if (h >= 18 && h <= 22) return { buy: 12.0, sell: 10.0 }; // Peak
+      if (h >= 10 && h <= 15) return { buy:  5.0, sell:  4.0 }; // Solar surplus hours
+      return { buy: 7.5, sell: 6.0 };                           // Off-peak
+    };
 
-  const [flows,       setFlows]       = useState<Record<string, number>>({});
-  const [powerLabels, setPowerLabels] = useState({ grid: 0, solar: 0, house: 0, ev: 0, battery: 0 });
+    // Realistic Daily Variation Factors (persisted per day)
+    const dailyFactors = useRef({
+      solar: 1.0, load: 1.0, commute: 1.0, isWeekend: false, errandHour: 10, errandDuration: 60
+    });
 
-  const [history, setHistory] = useState<{
-    time: number; evSoc: number; homeBatterySoc: number; gridNet: number;
-    solarToHouse: number; evToHouse: number; gridToHouse: number; day: number;
-  }[]>([]);
+    useEffect(() => {
+      const isWeekend = (dayNumber % 7 === 6) || (dayNumber % 7 === 0);
+      dailyFactors.current = {
+        solar: isWeekend ? 0.7 + Math.random() * 0.4 : 0.4 + Math.random() * 0.7,
+        load: isWeekend ? 1.1 + Math.random() * 0.3 : 0.85 + Math.random() * 0.25,
+        commute: isWeekend ? 0 : 0.8 + Math.random() * 0.4,
+        isWeekend,
+        errandHour: 10 + Math.floor(Math.random() * 5),
+        errandDuration: 30 + Math.floor(Math.random() * 90)
+      };
+    }, [dayNumber]);
 
-  const [dailyBills, setDailyBills] = useState<DailyBill[]>([]);
+    const [flows,       setFlows]       = useState<Record<string, number>>({});
+    const [powerLabels, setPowerLabels] = useState({ grid: 0, solar: 0, house: 0, ev: 0, battery: 0 });
 
-  // Ref to accumulate intra-day stats precisely
-  const intraDayStats = useRef({
-    totalGridKwh: 0, totalGridCostRs: 0, evChargingCostRs: 0,
-    solarGeneratedKwh: 0, solarSavedCostRs: 0,
-    v2gExportKwh: 0, v2gEarningsRs: 0,
-    v2hUsedKwh: 0, v2hSavedCostRs: 0,
-    totalKmDriven: 0, totalConsumptionKwh: 0,
-    outageOccurred: false
-  });
+    const [history, setHistory] = useState<{
+      time: number; evSoc: number; homeBatterySoc: number; gridNet: number;
+      solarToHouse: number; evToHouse: number; gridToHouse: number; day: number;
+    }[]>([]);
 
-  const dayStartSocRef = useRef(80.0);
+    const [dailyBills, setDailyBills] = useState<DailyBill[]>([]);
 
-  const resetDay = useCallback(() => {
-    setIsRunning(false);
-    setTimeStep(0);
-    setGridIsDown(false);
-    setIsEvPluggedIn(true);
-    setTotalCost(0.0);
-    setTotalEarnings(0.0);
-    setMode('Ready');
-    setHistory([]);
-    setFlows({});
-    setPowerLabels({ grid: 0, solar: 0, house: 0, ev: 0, battery: 0 });
-    // Reset intra-day
-    intraDayStats.current = {
+    const intraDayStats = useRef({
       totalGridKwh: 0, totalGridCostRs: 0, evChargingCostRs: 0,
       solarGeneratedKwh: 0, solarSavedCostRs: 0,
       v2gExportKwh: 0, v2gEarningsRs: 0,
       v2hUsedKwh: 0, v2hSavedCostRs: 0,
       totalKmDriven: 0, totalConsumptionKwh: 0,
       outageOccurred: false
-    };
-  }, []);
+    });
 
-  const resetAll = useCallback(() => {
-    resetDay();
-    setDayNumber(1);
-    setEvSoc(80.0);
-    setHomeBatterySoc(50.0);
-    setCumulativeCost(0.0);
-    setCumulativeEarnings(0.0);
-    setDailyBills([]);
-    dayStartSocRef.current = 80.0;
-  }, [resetDay]);
+    const dayStartSocRef = useRef(80.0);
 
-  const startSim = useCallback(() => {
-    if (timeStep === 0) dayStartSocRef.current = evSoc;
-    setIsRunning(true);
-  }, [timeStep, evSoc]);
-
-  const pauseSim = useCallback(() => setIsRunning(false), []);
-
-  useEffect(() => {
-    if (!isRunning) return;
-    const interval = setInterval(() => {
-      setTimeStep(prev => {
-        if (prev >= 1439) {
-          setIsRunning(false);
-          return 1440;
-        }
-        return prev + 1;
-      });
-    }, 111);
-    return () => clearInterval(interval);
-  }, [isRunning]);
-
-  useEffect(() => {
-    if (timeStep !== 1440) return;
-    
-    // Finalize Daily Bill
-    const stats = intraDayStats.current;
-    const bill: DailyBill = {
-      day: dayNumber,
-      totalGridKwh: parseFloat(stats.totalGridKwh.toFixed(2)),
-      totalGridCostRs: parseFloat(stats.totalGridCostRs.toFixed(2)),
-      evChargingCostRs: parseFloat(stats.evChargingCostRs.toFixed(2)),
-      solarGeneratedKwh: parseFloat(stats.solarGeneratedKwh.toFixed(2)),
-      solarSavedCostRs: parseFloat(stats.solarSavedCostRs.toFixed(2)),
-      v2gExportKwh: parseFloat(stats.v2gExportKwh.toFixed(2)),
-      v2gEarningsRs: parseFloat(stats.v2gEarningsRs.toFixed(2)),
-      v2hUsedKwh: parseFloat(stats.v2hUsedKwh.toFixed(2)),
-      v2hSavedCostRs: parseFloat(stats.v2hSavedCostRs.toFixed(2)),
-      totalKmDriven: parseFloat(stats.totalKmDriven.toFixed(1)),
-      totalConsumptionKwh: parseFloat(stats.totalConsumptionKwh.toFixed(2)),
-      outageOccurred: stats.outageOccurred,
-      netCostRs: parseFloat((stats.totalGridCostRs - stats.v2gEarningsRs).toFixed(2)),
-      startSoc: dayStartSocRef.current,
-      endSoc: evSoc,
-    };
-
-    setDailyBills(prev => [...prev, bill]);
-    setCumulativeCost(prev  => prev + totalCost);
-    setCumulativeEarnings(prev => prev + totalEarnings);
-
-    // Auto-advance
-    const t = setTimeout(() => {
-      setDayNumber(d => d + 1);
-      dayStartSocRef.current = evSoc;
+    const resetDay = useCallback(() => {
+      setIsRunning(false);
       setTimeStep(0);
+      setGridIsDown(false);
+      setIsEvPluggedIn(true);
       setTotalCost(0.0);
       setTotalEarnings(0.0);
+      setMode('Ready');
       setHistory([]);
       setFlows({});
-      setMode('Ready');
+      setPowerLabels({ grid: 0, solar: 0, house: 0, ev: 0, battery: 0 });
       intraDayStats.current = {
         totalGridKwh: 0, totalGridCostRs: 0, evChargingCostRs: 0,
         solarGeneratedKwh: 0, solarSavedCostRs: 0,
@@ -217,25 +152,112 @@ export function useSimulation(params: SimParams = DEFAULT_PARAMS) {
         totalKmDriven: 0, totalConsumptionKwh: 0,
         outageOccurred: false
       };
+    }, []);
+
+    const resetAll = useCallback(() => {
+      resetDay();
+      setDayNumber(1);
+      setEvSoc(80.0);
+      setHomeBatterySoc(50.0);
+      setCumulativeCost(0.0);
+      setCumulativeEarnings(0.0);
+      setDailyBills([]);
+      dayStartSocRef.current = 80.0;
+    }, [resetDay]);
+
+    const startSim = useCallback(() => {
+      if (timeStep === 0) dayStartSocRef.current = evSoc;
       setIsRunning(true);
-    }, 1500);
-    return () => clearTimeout(t);
-  }, [timeStep]);
+    }, [timeStep, evSoc]);
 
-  useEffect(() => {
-    if (timeStep === 0 || timeStep > 1440) return;
-    if (!isRunning) return;
+    const pauseSim = useCallback(() => setIsRunning(false), []);
 
-    const minuteOfDay = timeStep;
-    const hour        = Math.floor(minuteOfDay / 60);
-    const interval_h  = 1 / 60.0;
-    const { buy: buyRate, sell: sellRate } = getRate(hour);
+    useEffect(() => {
+      if (!isRunning) return;
+      const interval = setInterval(() => {
+        setTimeStep(prev => {
+          if (prev >= 1439) {
+            setIsRunning(false);
+            return 1440;
+          }
+          return prev + 1;
+        });
+      }, 111);
+      return () => clearInterval(interval);
+    }, [isRunning]);
 
-    const solarPower = solarProfile[minuteOfDay] || 0;
-    const homeLoad   = homeLoadProfile[minuteOfDay] || 0;
-    intraDayStats.current.solarGeneratedKwh += solarPower * interval_h;
-    intraDayStats.current.totalConsumptionKwh += homeLoad * interval_h;
-    if (gridIsDown) intraDayStats.current.outageOccurred = true;
+    useEffect(() => {
+      if (timeStep !== 1440) return;
+      
+      const stats = intraDayStats.current;
+      const bill: DailyBill = {
+        day: dayNumber,
+        totalGridKwh: parseFloat(stats.totalGridKwh.toFixed(2)),
+        totalGridCostRs: parseFloat(stats.totalGridCostRs.toFixed(2)),
+        evChargingCostRs: parseFloat(stats.evChargingCostRs.toFixed(2)),
+        solarGeneratedKwh: parseFloat(stats.solarGeneratedKwh.toFixed(2)),
+        solarSavedCostRs: parseFloat(stats.solarSavedCostRs.toFixed(2)),
+        v2gExportKwh: parseFloat(stats.v2gExportKwh.toFixed(2)),
+        v2gEarningsRs: parseFloat(stats.v2gEarningsRs.toFixed(2)),
+        v2hUsedKwh: parseFloat(stats.v2hUsedKwh.toFixed(2)),
+        v2hSavedCostRs: parseFloat(stats.v2hSavedCostRs.toFixed(2)),
+        totalKmDriven: parseFloat(stats.totalKmDriven.toFixed(1)),
+        totalConsumptionKwh: parseFloat(stats.totalConsumptionKwh.toFixed(2)),
+        outageOccurred: stats.outageOccurred,
+        netCostRs: parseFloat((stats.totalGridCostRs - stats.v2gEarningsRs).toFixed(2)),
+        startSoc: dayStartSocRef.current,
+        endSoc: evSoc,
+      };
+
+      setDailyBills(prev => [...prev, bill]);
+      setCumulativeCost(prev  => prev + totalCost);
+      setCumulativeEarnings(prev => prev + totalEarnings);
+
+      const t = setTimeout(() => {
+        setDayNumber(d => d + 1);
+        dayStartSocRef.current = evSoc;
+        setTimeStep(0);
+        setTotalCost(0.0);
+        setTotalEarnings(0.0);
+        setHistory([]);
+        setFlows({});
+        setMode('Ready');
+        intraDayStats.current = {
+          totalGridKwh: 0, totalGridCostRs: 0, evChargingCostRs: 0,
+          solarGeneratedKwh: 0, solarSavedCostRs: 0,
+          v2gExportKwh: 0, v2gEarningsRs: 0,
+          v2hUsedKwh: 0, v2hSavedCostRs: 0,
+          totalKmDriven: 0, totalConsumptionKwh: 0,
+          outageOccurred: false
+        };
+        setIsRunning(true);
+      }, 1500);
+      return () => clearTimeout(t);
+    }, [timeStep]);
+
+    useEffect(() => {
+      if (timeStep === 0 || timeStep > 1440) return;
+      if (!isRunning) return;
+
+      const minuteOfDay = timeStep;
+      const hour        = Math.floor(minuteOfDay / 60);
+      const interval_h  = 1 / 60.0;
+      const { buy: buyRate, sell: sellRate } = getRate(hour);
+      const f = dailyFactors.current;
+
+      // Realistic pseudo-random high-frequency noise
+      const minuteNoise = (Math.sin(minuteOfDay / 5) * 0.05) + (Math.sin(minuteOfDay / 13) * 0.03);
+
+      let baseSolar = solarProfile[minuteOfDay] || 0;
+      let solarPower = baseSolar * f.solar;
+      if (solarPower > 0) solarPower = Math.max(0, solarPower + minuteNoise * 0.5);
+
+      let baseLoad = homeLoadProfile[minuteOfDay] || 0;
+      let homeLoad = Math.max(0.1, baseLoad * f.load + minuteNoise);
+
+      intraDayStats.current.solarGeneratedKwh += solarPower * interval_h;
+      intraDayStats.current.totalConsumptionKwh += homeLoad * interval_h;
+      if (gridIsDown) intraDayStats.current.outageOccurred = true;
 
     let chargerMode = 'Idle';
     let netEvPower  = 0;
@@ -272,36 +294,54 @@ export function useSimulation(params: SimParams = DEFAULT_PARAMS) {
 
     let pluggedIn = isEvPluggedIn;
 
-    // 3. EV Commute logic
-    if (hour >= 8 && hour < 9) {
+    // 3. Realistic EV Commute logic
+    let isCommuting = false;
+    let currentCommuteKmPerHour = 0;
+    
+    if (!f.isWeekend) {
+      // Weekday Commute (8am-9am and 5pm-6pm)
+      if (hour >= 8 && hour < 9) {
+        isCommuting = true;
+        currentCommuteKmPerHour = 15 * f.commute;
+      } else if (hour >= 17 && hour < 18) {
+        isCommuting = true;
+        currentCommuteKmPerHour = 15 * f.commute;
+      } else if (hour >= 9 && hour < 17 && !gridIsDown && v2gCapable && !isManualV2H) {
+        // Automatic V2G at office if surplus SOC
+        pluggedIn = false; // "At office" physically away from home, but assume office supports V2G export
+        if (currentEvSoc > requiredSoc + 1) {
+          chargerMode = 'V2G Export';
+          const surplusSoc = currentEvSoc - requiredSoc;
+          const surplusKwh = (surplusSoc / 100) * evCapacityKwh;
+          const dischargePower = Math.min(v2gRateKw, surplusKwh / interval_h);
+          netEvPower = -dischargePower;
+          currentFlows.ev_grid = dischargePower;
+          gridPower -= dischargePower;
+          intraDayStats.current.v2gExportKwh += dischargePower * interval_h;
+          intraDayStats.current.v2gEarningsRs += (dischargePower * interval_h) * sellRate;
+        }
+      }
+    } else {
+      // Weekend Errand
+      if (hour >= f.errandHour && minuteOfDay < (f.errandHour * 60 + f.errandDuration)) {
+        isCommuting = true;
+        // Total weekend errand is 20km, distribute over duration
+        const errandHours = f.errandDuration / 60;
+        currentCommuteKmPerHour = 20 / errandHours;
+      }
+    }
+
+    if (isCommuting) {
+      const commuteKwhPerHour = (currentCommuteKmPerHour * consumptionWhPerKm / 1000);
       netEvPower = -commuteKwhPerHour;
-      chargerMode = 'Driving (Commute)';
+      chargerMode = f.isWeekend ? 'Weekend Errand' : 'Driving (Commute)';
       pluggedIn = false;
-      intraDayStats.current.totalKmDriven += commuteKm * interval_h;
-    } else if (hour >= 17 && hour < 18) {
-      netEvPower = -commuteKwhPerHour;
-      chargerMode = 'Driving (Home)';
-      pluggedIn = false;
-      intraDayStats.current.totalKmDriven += commuteKm * interval_h;
+      intraDayStats.current.totalKmDriven += currentCommuteKmPerHour * interval_h;
     } else if (hour === 18 && minuteOfDay === 18 * 60) {
       pluggedIn = true;
       chargerMode = 'Plugged In (Idle)';
-    } else if (hour >= 11 && hour < 17 && !gridIsDown && v2gCapable && !isManualV2H) {
-      // Automatic V2G at office if surplus SOC
-      pluggedIn = false; // "At office" logically means plugged into office grid, but we treat it as exporting from remote for demo
-      if (currentEvSoc > requiredSoc + 1) {
-        chargerMode = 'V2G Export';
-        const surplusSoc = currentEvSoc - requiredSoc;
-        const surplusKwh = (surplusSoc / 100) * evCapacityKwh;
-        const dischargePower = Math.min(v2gRateKw, surplusKwh / interval_h);
-        netEvPower = -dischargePower;
-        currentFlows.ev_grid = dischargePower;
-        gridPower -= dischargePower;
-        intraDayStats.current.v2gExportKwh += dischargePower * interval_h;
-        intraDayStats.current.v2gEarningsRs += (dischargePower * interval_h) * sellRate;
-      }
-    } 
-    
+    }
+
     // 4. EV Plugged in at home logic
     if (pluggedIn) {
       // Manual V2H OR Grid Down Emergency V2H
