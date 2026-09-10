@@ -10,12 +10,14 @@ import { generateDailyEstimation, DailyEstimation } from '../lib/dailyPlanner';
 import { EVModel, DEFAULT_EV, CHEMISTRY_INFO } from '../lib/evModels';
 import dynamic from 'next/dynamic';
 
-const AnalyticsTab    = dynamic(() => import('./components/AnalyticsTab'),    { ssr: false });
-const DailyPlannerTab = dynamic(() => import('./components/DailyPlannerTab'), { ssr: false });
-const OutagesTab      = dynamic(() => import('./components/OutagesTab'),       { ssr: false });
-const DigitalTwinTab  = dynamic(() => import('./components/DigitalTwinTab'),  { ssr: false });
-const EVSelector      = dynamic(() => import('./components/EVSelector'),       { ssr: false });
-const DailyBillsTab   = dynamic(() => import('./components/DailyBillsTab'),    { ssr: false });
+const AnalyticsTab    = dynamic(() => import('./components/AnalyticsTab'),         { ssr: false });
+const DailyPlannerTab = dynamic(() => import('./components/DailyPlannerTab'),       { ssr: false });
+const OutagesTab      = dynamic(() => import('./components/OutagesTab'),             { ssr: false });
+const DigitalTwinTab  = dynamic(() => import('./components/DigitalTwinTab'),         { ssr: false });
+const EVSelector      = dynamic(() => import('./components/EVSelector'),             { ssr: false });
+const DailyBillsTab   = dynamic(() => import('./components/DailyBillsTab'),          { ssr: false });
+const WeatherPlannerPanel = dynamic(() => import('./components/WeatherPlannerPanel'), { ssr: false });
+import { WeatherConditionId, getWeatherForDay } from '../lib/weatherModel';
 
 export function cn(...inputs: (string | undefined | null | false)[]) {
   return twMerge(clsx(inputs));
@@ -47,6 +49,9 @@ export default function Dashboard() {
   // EV model state
   const [selectedEV, setSelectedEV] = useState<EVModel>(DEFAULT_EV);
 
+  // Per-day weather overrides — keys are 1-based day numbers
+  const [weatherOverrides, setWeatherOverrides] = useState<Partial<Record<number, WeatherConditionId>>>({});
+
   const simParams: SimParams = {
     evCapacityKwh:      selectedEV.batteryKwh,
     evMaxRangeKm:       selectedEV.rangeKm,
@@ -54,6 +59,7 @@ export default function Dashboard() {
     v2gRateKw:          selectedEV.v2gCapable ? 6.0 : 0,
     v2gCapable:         selectedEV.v2gCapable,
     consumptionWhPerKm: selectedEV.consumptionWhPerKm,
+    weatherOverrides,
   };
 
   const sim = useSimulation(simParams);
@@ -64,7 +70,7 @@ export default function Dashboard() {
   );
 
   const [activeTab, setActiveTab] = useState<Tab>('Dashboard');
-  const [weather, setWeather] = useState<any>(null);
+  const [weather, setWeather] = useState<any>(null);   // kept for optional real-weather display only
   const [cityInput, setCityInput] = useState('');
   const [isFetchingWeather, setIsFetchingWeather] = useState(false);
   const [isTripModalOpen, setIsTripModalOpen] = useState(false);
@@ -78,6 +84,7 @@ export default function Dashboard() {
   const maddpgTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const plannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Optional: fetch real weather for display in Digital Twin only (doesn't affect simulation)
   const fetchWeather = useCallback(async (city?: string) => {
     setIsFetchingWeather(true);
     try {
@@ -90,11 +97,17 @@ export default function Dashboard() {
 
   useEffect(() => { fetchWeather('Lucknow'); }, []);
 
-  const weatherTemp    = weather?.current?.main?.temp ?? 25;
-  const cloudCover     = weather?.current?.clouds?.all ?? 50;
-  const forecastTemps  = weather?.forecast?.list?.slice(0,8).map((f: any) => f.main.temp) ?? [];
-  const forecastClouds = weather?.forecast?.list?.slice(0,8).map((f: any) => f.clouds.all) ?? [];
-  const forecastDescs  = weather?.forecast?.list?.slice(0,8).map((f: any) => f.weather[0].description) ?? [];
+  // ── Weather inputs now come from the custom model, NOT the OpenWeather API ──
+  const currentPreset = sim.currentWeather;
+  const weatherTemp   = currentPreset.temperatureC;
+  const cloudCover    = currentPreset.cloudCoverPct;
+  // Forecast: project the next 8 day-slots using the weather schedule
+  const forecastTemps  = Array.from({ length: 8 }, (_, i) =>
+    getWeatherForDay(sim.dayNumber + i + 1, weatherOverrides).temperatureC);
+  const forecastClouds = Array.from({ length: 8 }, (_, i) =>
+    getWeatherForDay(sim.dayNumber + i + 1, weatherOverrides).cloudCoverPct);
+  const forecastDescs  = Array.from({ length: 8 }, (_, i) =>
+    getWeatherForDay(sim.dayNumber + i + 1, weatherOverrides).label);
 
   // Debounced MADDPG — now passes ALL model-specific params
   useEffect(() => {
@@ -120,9 +133,9 @@ export default function Dashboard() {
     return () => { if (maddpgTimerRef.current) clearTimeout(maddpgTimerRef.current); };
   }, [sim.evSoc, sim.minRangeKm, sim.gridIsDown, weatherTemp, cloudCover, outages, degradation.soh, selectedEV.id]);
 
-  // Debounced Daily Planner — runs 1200ms after MADDPG stabilizes
+  // Debounced Daily Planner — runs after MADDPG stabilizes
   useEffect(() => {
-    if (!maddpgSchedule || !weather?.current) return;
+    if (!maddpgSchedule) return;
     if (plannerTimerRef.current) clearTimeout(plannerTimerRef.current);
     plannerTimerRef.current = setTimeout(() => {
       const plan = generateDailyEstimation({
@@ -133,12 +146,10 @@ export default function Dashboard() {
         homeBatterySoc:      sim.homeBatterySoc,
         minRangeKm:          sim.minRangeKm,
         evMaxRangeKm:        sim.evMaxRangeKm,
-        // ── EV model-specific params (REQUIRED for correct physics) ──────
         evCapacityKwh:       selectedEV.batteryKwh,
         chargeRateKw:        selectedEV.chargeRateKw,
         consumptionWhPerKm:  selectedEV.consumptionWhPerKm,
         v2gCapable:          selectedEV.v2gCapable,
-        // ─────────────────────────────────────────────────────────────────
         batterySoh:          degradation.soh,
         gridIsDown:          sim.gridIsDown,
         outages,
@@ -148,7 +159,7 @@ export default function Dashboard() {
       setIsPlannerLoading(false);
     }, 1200);
     return () => { if (plannerTimerRef.current) clearTimeout(plannerTimerRef.current); };
-  }, [maddpgSchedule, weather?.cityName, weatherTemp, cloudCover, selectedEV.id]);
+  }, [maddpgSchedule, weatherTemp, cloudCover, selectedEV.id]);
 
   // Record habit when sim day completes — use EV-specific costs only
   const prevDay = useRef(1);
@@ -307,30 +318,13 @@ export default function Dashboard() {
                 )}
               </LabelFrame>
 
-              <LabelFrame title={`Weather (${weather?.cityName || 'Lucknow'})`}>
-                <div className="flex gap-2 mb-2">
-                  <input value={cityInput} onChange={e => setCityInput(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && fetchWeather(cityInput)}
-                    placeholder="Search city..." className="flex-1 bg-input px-2 py-1 text-xs rounded outline-none" />
-                  <TkButton className="w-auto px-3 text-xs" disabled={isFetchingWeather || !cityInput} onClick={() => fetchWeather(cityInput)}>Go</TkButton>
-                </div>
-                {weather?.current?.weather ? (
-                  <div className="text-center">
-                    <div className="font-bold">{weather.current.weather[0].main}</div>
-                    <div className="text-sm">{weather.current.main.temp.toFixed(1)}°C</div>
-                    <div className="text-xs">Vis: {(weather.current.visibility/1000).toFixed(1)} km</div>
-                    {weather.air_pollution?.list?.[0]?.components && (
-                      <div className="text-xs font-bold mt-1 text-[#A3BE8C]">
-                        PM2.5: {weather.air_pollution.list[0].components.pm2_5.toFixed(1)} µg/m³
-                      </div>
-                    )}
-                  </div>
-                ) : weather?.error ? (
-                  <div className="text-center text-xs text-red-400">Weather API Error</div>
-                ) : <div className="text-center text-xs">Loading...</div>}
-                <TkButton disabled={!weather?.forecast} className="mt-2 text-xs" onClick={() => setIsForecastModalOpen(true)}>
-                  Show 5-Day Forecast
-                </TkButton>
+              <LabelFrame title={`⛅ Weather Planner — ${currentPreset.emoji} ${currentPreset.label}`}>
+                <WeatherPlannerPanel
+                  dayNumber={sim.dayNumber}
+                  overrides={weatherOverrides}
+                  onChange={setWeatherOverrides}
+                  totalDaysToShow={14}
+                />
               </LabelFrame>
 
               <LabelFrame title="User Settings">

@@ -35,7 +35,11 @@ export default function DailyBillsTab({
               onClick={() => setSelectedDay(b.day)}
               className={`p-3 text-left rounded border transition-colors ${selectedDay === b.day ? 'bg-[var(--color-frame)] border-[var(--color-accent)]' : 'border-transparent hover:bg-[var(--color-frame)]'}`}
             >
-              <div className="font-medium text-[var(--color-accent)]">Day {b.day}</div>
+              <div className="flex items-center gap-2">
+                <span className="text-base">{b.weatherEmoji || '🌡️'}</span>
+                <span className="font-medium text-[var(--color-accent)]">Day {b.day}</span>
+              </div>
+              <div className="text-xs text-slate-500 mt-0.5">{b.weatherCondition || ''}</div>
               <div className="text-xs text-slate-400 mt-1">Net: ₹{b.netCostRs.toFixed(2)}</div>
             </button>
           ))}
@@ -48,8 +52,13 @@ export default function DailyBillsTab({
         <div className="text-center mb-6 pb-6 border-b border-dashed border-slate-500">
           <h2 className="text-2xl font-black text-slate-100 tracking-wider">NEXUS ENERGY SUMMARY</h2>
           <div className="text-slate-400 mt-1 font-mono text-sm">DAY {selectedBill.day} STATEMENT</div>
+          {selectedBill.weatherCondition && (
+            <div className="mt-2 inline-block px-3 py-1 bg-slate-800 text-slate-300 text-sm font-medium rounded-full border border-slate-600">
+              {selectedBill.weatherCondition}
+            </div>
+          )}
           {selectedBill.outageOccurred && (
-            <div className="mt-2 inline-block px-3 py-1 bg-red-900/50 text-red-400 text-xs font-bold rounded-full border border-red-800">
+            <div className="mt-2 inline-block px-3 py-1 bg-red-900/50 text-red-400 text-xs font-bold rounded-full border border-red-800 ml-2">
               ⚠️ Grid Emergency Occurred
             </div>
           )}

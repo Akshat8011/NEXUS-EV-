@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { WeatherConditionId, WeatherPreset, getWeatherForDay } from '../lib/weatherModel';
 
 // Profile generation
 const generateSmoothProfiles = () => {
   const homeLoadHourly = [0.8,0.6,0.5,0.5,0.6,0.8,1.2,1.5,1.8,2.0,2.5,3.0,3.5,3.2,3.0,2.8,2.5,2.8,3.5,3.0,2.5,2.0,1.5,1.0, 0.8];
   // 5 kWp rooftop PV — clear-sky kW output per hour. Peak ≈ 5.00 kW at solar noon.
   // Values from IEC 61724 irradiance model, 18% panel efficiency, 0.75 performance ratio.
-  // DO NOT multiply by 5 — values are already in kW, not per-unit.
   const solarHourly    = [0,0,0,0,0,0.05,0.40,1.20,2.80,4.00,4.80,5.00,4.80,3.80,2.60,1.40,0.50,0.10,0,0,0,0,0,0, 0];
 
   const homeLoadProfile = new Float32Array(1440);
@@ -36,6 +36,8 @@ export interface SimParams {
   v2gRateKw:     number;
   v2gCapable:    boolean;
   consumptionWhPerKm: number;
+  /** User-controlled per-day weather overrides. Keys are 1-based day numbers. */
+  weatherOverrides: Partial<Record<number, WeatherConditionId>>;
 }
 
 const DEFAULT_PARAMS: SimParams = {
@@ -45,10 +47,13 @@ const DEFAULT_PARAMS: SimParams = {
   v2gRateKw:     6.0,
   v2gCapable:    true,
   consumptionWhPerKm: 161,
+  weatherOverrides: {},
 };
 
 export interface DailyBill {
   day: number;
+  weatherCondition: string;  // e.g. "☀️ Sunny"
+  weatherEmoji: string;
   totalGridKwh: number;
   totalGridCostRs: number;
   evChargingCostRs: number;
@@ -84,33 +89,43 @@ export function useSimulation(params: SimParams = DEFAULT_PARAMS) {
 
   const [minRangeKm, setMinRangeKm] = useState(80);
 
-  const { evCapacityKwh, evMaxRangeKm, chargeRateKw, v2gRateKw, v2gCapable, consumptionWhPerKm } = params;
+  const { evCapacityKwh, evMaxRangeKm, chargeRateKw, v2gRateKw, v2gCapable, consumptionWhPerKm, weatherOverrides } = params;
   const fixedBufferKm  = 50.0;
   const homeBatteryCapacityKwh = 10.0;
-  
+
+  // Current day's resolved weather preset (ref so tick loop can read without stale closure)
+  const currentWeatherRef = useRef<WeatherPreset>(getWeatherForDay(1, weatherOverrides ?? {}));
+
   // Real-time TOU rates
-    const getRate = (h: number) => {
-      if (h >= 18 && h <= 22) return { buy: 12.0, sell: 10.0 }; // Peak
-      if (h >= 10 && h <= 15) return { buy:  5.0, sell:  4.0 }; // Solar surplus hours
-      return { buy: 7.5, sell: 6.0 };                           // Off-peak
+  const getRate = (h: number) => {
+    if (h >= 18 && h <= 22) return { buy: 12.0, sell: 10.0 }; // Peak
+    if (h >= 10 && h <= 15) return { buy:  5.0, sell:  4.0 }; // Solar surplus hours
+    return { buy: 7.5, sell: 6.0 };                           // Off-peak
+  };
+
+  // Daily variation factors — driven by weather preset + small behavioural noise
+  const dailyFactors = useRef({
+    solar: 1.0, load: 1.0, commute: 1.0, evEfficiency: 1.0,
+    isWeekend: false, errandHour: 10, errandDuration: 60
+  });
+
+  useEffect(() => {
+    const preset = getWeatherForDay(dayNumber, weatherOverrides ?? {});
+    currentWeatherRef.current = preset;
+    const isWeekend = (dayNumber % 7 === 6) || (dayNumber % 7 === 0);
+    // Weather preset defines the dominant multipliers.
+    // A small ±5% behavioural noise is added on top (different people run different appliances).
+    const behaviourNoise = 0.95 + Math.random() * 0.10;
+    dailyFactors.current = {
+      solar:       preset.solarMultiplier,               // fully weather-driven
+      load:        preset.loadMultiplier * behaviourNoise,
+      evEfficiency: preset.evEfficiencyMultiplier,
+      commute:     isWeekend ? 0 : 0.85 + Math.random() * 0.30,
+      isWeekend,
+      errandHour:  10 + Math.floor(Math.random() * 5),
+      errandDuration: 30 + Math.floor(Math.random() * 90),
     };
-
-    // Realistic Daily Variation Factors (persisted per day)
-    const dailyFactors = useRef({
-      solar: 1.0, load: 1.0, commute: 1.0, isWeekend: false, errandHour: 10, errandDuration: 60
-    });
-
-    useEffect(() => {
-      const isWeekend = (dayNumber % 7 === 6) || (dayNumber % 7 === 0);
-      dailyFactors.current = {
-        solar: isWeekend ? 0.7 + Math.random() * 0.4 : 0.4 + Math.random() * 0.7,
-        load: isWeekend ? 1.1 + Math.random() * 0.3 : 0.85 + Math.random() * 0.25,
-        commute: isWeekend ? 0 : 0.8 + Math.random() * 0.4,
-        isWeekend,
-        errandHour: 10 + Math.floor(Math.random() * 5),
-        errandDuration: 30 + Math.floor(Math.random() * 90)
-      };
-    }, [dayNumber]);
+  }, [dayNumber, JSON.stringify(weatherOverrides)]);
 
     const [flows,       setFlows]       = useState<Record<string, number>>({});
     const [powerLabels, setPowerLabels] = useState({ grid: 0, solar: 0, house: 0, ev: 0, battery: 0 });
@@ -190,8 +205,11 @@ export function useSimulation(params: SimParams = DEFAULT_PARAMS) {
       if (timeStep !== 1440) return;
       
       const stats = intraDayStats.current;
+      const w = currentWeatherRef.current;
       const bill: DailyBill = {
         day: dayNumber,
+        weatherCondition: `${w.emoji} ${w.label}`,
+        weatherEmoji: w.emoji,
         totalGridKwh: parseFloat(stats.totalGridKwh.toFixed(2)),
         totalGridCostRs: parseFloat(stats.totalGridCostRs.toFixed(2)),
         evChargingCostRs: parseFloat(stats.evChargingCostRs.toFixed(2)),
@@ -244,16 +262,26 @@ export function useSimulation(params: SimParams = DEFAULT_PARAMS) {
       const interval_h  = 1 / 60.0;
       const { buy: buyRate, sell: sellRate } = getRate(hour);
       const f = dailyFactors.current;
+      const w = currentWeatherRef.current;
 
-      // Realistic pseudo-random high-frequency noise
+      // Realistic pseudo-random high-frequency noise (mimics cloud scattering & appliance cycling)
       const minuteNoise = (Math.sin(minuteOfDay / 5) * 0.05) + (Math.sin(minuteOfDay / 13) * 0.03);
 
-      let baseSolar = solarProfile[minuteOfDay] || 0;
-      let solarPower = baseSolar * f.solar;
-      if (solarPower > 0) solarPower = Math.max(0, solarPower + minuteNoise * 0.5);
+      // Solar: weather preset drives the base yield; noise adds sub-minute cloud flickers
+      let solarPower = Math.max(0, (solarProfile[minuteOfDay] || 0) * f.solar + minuteNoise * 0.4);
 
-      let baseLoad = homeLoadProfile[minuteOfDay] || 0;
-      let homeLoad = Math.max(0.1, baseLoad * f.load + minuteNoise);
+      // Home load: weather preset drives heating/cooling demand; noise adds appliance cycling
+      let homeLoad = Math.max(0.15, (homeLoadProfile[minuteOfDay] || 0) * f.load + minuteNoise * 0.08);
+
+      // Weather-driven random grid outage (check every 120 minutes of simulation time)
+      if (w.outageChancePer120Min > 0 && !gridIsDown && minuteOfDay % 120 === 60) {
+        if (Math.random() < w.outageChancePer120Min) {
+          setGridIsDown(true);
+          // Auto-restore after 20–40 simulated minutes
+          const restoreAfter = (20 + Math.floor(Math.random() * 20)) * 111; // ms
+          setTimeout(() => setGridIsDown(false), restoreAfter);
+        }
+      }
 
       intraDayStats.current.solarGeneratedKwh += solarPower * interval_h;
       intraDayStats.current.totalConsumptionKwh += homeLoad * interval_h;
@@ -313,7 +341,9 @@ export function useSimulation(params: SimParams = DEFAULT_PARAMS) {
     // --- 4. EV POWER LOGIC ---
     if (isCommuting) {
       chargerMode = f.isWeekend ? 'Weekend Errand' : 'Driving (Commute)';
-      netEvPower = -(currentCommuteKmPerHour * consumptionWhPerKm / 1000);
+      // evEfficiency < 1 in cold/hot/rainy weather → more Wh consumed per km
+      const effectiveWhPerKm = consumptionWhPerKm / f.evEfficiency;
+      netEvPower = -(currentCommuteKmPerHour * effectiveWhPerKm / 1000);
       intraDayStats.current.totalKmDriven += currentCommuteKmPerHour * interval_h;
       setIsEvPluggedIn(false);
     } 
@@ -445,6 +475,7 @@ export function useSimulation(params: SimParams = DEFAULT_PARAMS) {
     mode, minRangeKm, flows, history, powerLabels,
     evMaxRangeKm, evCapacityKwh,
     dailyBills,
+    currentWeather: currentWeatherRef.current,
     setMinRangeKm, setGridIsDown, setIsManualV2H, setIsEvPluggedIn,
     startSim, pauseSim, resetDay, resetAll,
   };
