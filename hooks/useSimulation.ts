@@ -38,6 +38,7 @@ export interface SimParams {
   consumptionWhPerKm: number;
   /** User-controlled per-day weather overrides. Keys are 1-based day numbers. */
   weatherOverrides: Partial<Record<number, WeatherConditionId>>;
+  outages?: { startHour: number; endHour: number; city: string }[];
 }
 
 const DEFAULT_PARAMS: SimParams = {
@@ -89,7 +90,7 @@ export function useSimulation(params: SimParams = DEFAULT_PARAMS) {
 
   const [minRangeKm, setMinRangeKm] = useState(80);
 
-  const { evCapacityKwh, evMaxRangeKm, chargeRateKw, v2gRateKw, v2gCapable, consumptionWhPerKm, weatherOverrides } = params;
+  const { evCapacityKwh, evMaxRangeKm, chargeRateKw, v2gRateKw, v2gCapable, consumptionWhPerKm, weatherOverrides, outages = [] } = params;
   const fixedBufferKm  = 50.0;
   const homeBatteryCapacityKwh = 10.0;
 
@@ -268,7 +269,9 @@ export function useSimulation(params: SimParams = DEFAULT_PARAMS) {
       const minuteNoise = (Math.sin(minuteOfDay / 5) * 0.05) + (Math.sin(minuteOfDay / 13) * 0.03);
 
       // Solar: weather preset drives the base yield; noise adds sub-minute cloud flickers
-      let solarPower = Math.max(0, (solarProfile[minuteOfDay] || 0) * f.solar + minuteNoise * 0.4);
+      const baseSolar = solarProfile[minuteOfDay] || 0;
+      let solarPower = baseSolar > 0 ? Math.max(0, baseSolar * f.solar + minuteNoise * 0.4) : 0;
+      if (solarPower < 0.1) solarPower = 0; // Inverter startup threshold
 
       // Home load: weather preset drives heating/cooling demand; noise adds appliance cycling
       let homeLoad = Math.max(0.15, (homeLoadProfile[minuteOfDay] || 0) * f.load + minuteNoise * 0.08);
@@ -283,9 +286,12 @@ export function useSimulation(params: SimParams = DEFAULT_PARAMS) {
         }
       }
 
+      const isScheduledOutage = outages.some(o => hour >= o.startHour && hour < o.endHour);
+      const currentGridIsDown = gridIsDown || isScheduledOutage;
+
       intraDayStats.current.solarGeneratedKwh += solarPower * interval_h;
       intraDayStats.current.totalConsumptionKwh += homeLoad * interval_h;
-      if (gridIsDown) intraDayStats.current.outageOccurred = true;
+      if (currentGridIsDown) intraDayStats.current.outageOccurred = true;
 
     let chargerMode = 'Idle';
     let netEvPower  = 0;
@@ -349,7 +355,7 @@ export function useSimulation(params: SimParams = DEFAULT_PARAMS) {
     } 
     else if (!isAtHome) {
       setIsEvPluggedIn(false); // At Office
-      if (!gridIsDown && v2gCapable && !isManualV2H && currentEvSoc > requiredSoc + 1) {
+      if (!currentGridIsDown && v2gCapable && !isManualV2H && currentEvSoc > requiredSoc + 1) {
         chargerMode = 'V2G Export (Office)';
         const surplusSoc = currentEvSoc - requiredSoc;
         const surplusKw = (surplusSoc / 100) * evCapacityKwh / interval_h;
@@ -368,9 +374,9 @@ export function useSimulation(params: SimParams = DEFAULT_PARAMS) {
       chargerMode = 'Plugged In (Idle)';
       
       // V2H Check
-      const wantsV2H = isManualV2H || gridIsDown;
+      const wantsV2H = isManualV2H || currentGridIsDown;
       if (wantsV2H && v2gCapable && currentEvSoc > requiredSoc + 1 && houseLoadRemaining > 0) {
-        chargerMode = gridIsDown ? 'EMERGENCY V2H' : 'Manual V2H Active';
+        chargerMode = currentGridIsDown ? 'EMERGENCY V2H' : 'Manual V2H Active';
         const surplusSoc = currentEvSoc - requiredSoc;
         const surplusKw = (surplusSoc / 100) * evCapacityKwh / interval_h;
         const evToHouse = Math.min(houseLoadRemaining, v2gRateKw, surplusKw);
@@ -383,7 +389,7 @@ export function useSimulation(params: SimParams = DEFAULT_PARAMS) {
       }
       
       // Night Charging (if not V2H, Grid is UP)
-      if (!gridIsDown && !isManualV2H && (hour >= 22 || hour < 5) && currentEvSoc < 100 && netEvPower === 0) {
+      if (!currentGridIsDown && !isManualV2H && (hour >= 22 || hour < 5) && currentEvSoc < 100 && netEvPower === 0) {
         const missingSoc = 100 - currentEvSoc;
         const missingKw = (missingSoc / 100) * evCapacityKwh / interval_h;
         const chargeKw = Math.min(chargeRateKw, missingKw);
@@ -400,7 +406,7 @@ export function useSimulation(params: SimParams = DEFAULT_PARAMS) {
 
     // --- 5. GRID COVERS REMAINING HOUSE LOAD ---
     if (houseLoadRemaining > 0) {
-      if (!gridIsDown) {
+      if (!currentGridIsDown) {
         currentFlows.grid_house = houseLoadRemaining;
         gridPower += houseLoadRemaining;
         intraDayStats.current.totalGridKwh += houseLoadRemaining * interval_h;
@@ -435,7 +441,7 @@ export function useSimulation(params: SimParams = DEFAULT_PARAMS) {
         chargerMode = 'Solar Charging';
       }
       // c) Grid Export
-      if (solarRemaining > 0 && !gridIsDown) {
+      if (solarRemaining > 0 && !currentGridIsDown) {
         gridPower -= solarRemaining;
         intraDayStats.current.v2gEarningsRs += (solarRemaining * interval_h) * sellRate;
       }
@@ -468,9 +474,13 @@ export function useSimulation(params: SimParams = DEFAULT_PARAMS) {
     }]);
   }, [timeStep, isRunning]);
 
+  const currentHour = Math.floor(timeStep / 60);
+  const isScheduledOutage = (outages || []).some(o => currentHour >= o.startHour && currentHour < o.endHour);
+  const effectiveGridIsDown = gridIsDown || isScheduledOutage;
+
   return {
     isRunning, timeStep, dayNumber,
-    gridIsDown, isManualV2H, isEvPluggedIn, evSoc, homeBatterySoc,
+    gridIsDown: effectiveGridIsDown, isManualV2H, isEvPluggedIn, evSoc, homeBatterySoc,
     totalCost, totalEarnings, cumulativeCost, cumulativeEarnings,
     mode, minRangeKm, flows, history, powerLabels,
     evMaxRangeKm, evCapacityKwh,

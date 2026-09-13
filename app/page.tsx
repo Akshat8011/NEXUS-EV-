@@ -52,6 +52,8 @@ export default function Dashboard() {
   // Per-day weather overrides — keys are 1-based day numbers
   const [weatherOverrides, setWeatherOverrides] = useState<Partial<Record<number, WeatherConditionId>>>({});
 
+  const [outages, setOutages] = useState<OutageWindow[]>([]);
+  
   const simParams: SimParams = {
     evCapacityKwh:      selectedEV.batteryKwh,
     evMaxRangeKm:       selectedEV.rangeKm,
@@ -60,6 +62,7 @@ export default function Dashboard() {
     v2gCapable:         selectedEV.v2gCapable,
     consumptionWhPerKm: selectedEV.consumptionWhPerKm,
     weatherOverrides,
+    outages,
   };
 
   const sim = useSimulation(simParams);
@@ -75,7 +78,6 @@ export default function Dashboard() {
   const [isFetchingWeather, setIsFetchingWeather] = useState(false);
   const [isTripModalOpen, setIsTripModalOpen] = useState(false);
   const [isForecastModalOpen, setIsForecastModalOpen] = useState(false);
-  const [outages, setOutages] = useState<OutageWindow[]>([]);
   const [maddpgSchedule, setMaddpgSchedule] = useState<MADDPGSchedule | null>(null);
   const [dailyEstimation, setDailyEstimation] = useState<DailyEstimation | null>(null);
   const [isPlannerLoading, setIsPlannerLoading] = useState(false);
@@ -129,7 +131,7 @@ export default function Dashboard() {
         homeBatterySoc:      sim.homeBatterySoc,
       });
       setMaddpgSchedule(schedule);
-    }, 800);
+    }, 100);
     return () => { if (maddpgTimerRef.current) clearTimeout(maddpgTimerRef.current); };
   }, [sim.evSoc, sim.minRangeKm, sim.gridIsDown, weatherTemp, cloudCover, outages, degradation.soh, selectedEV.id]);
 
@@ -157,7 +159,7 @@ export default function Dashboard() {
       });
       setDailyEstimation(plan);
       setIsPlannerLoading(false);
-    }, 1200);
+    }, 200);
     return () => { if (plannerTimerRef.current) clearTimeout(plannerTimerRef.current); };
   }, [maddpgSchedule, weatherTemp, cloudCover, selectedEV.id]);
 
