@@ -514,6 +514,8 @@ export default function Dashboard() {
         {activeTab === 'Detailed Bills' && (
           <DailyBillsTab
             bills={sim.dailyBills}
+            maddpgSchedule={maddpgSchedule}
+            outages={outages}
           />
         )}
       </div>

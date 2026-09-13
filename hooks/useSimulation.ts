@@ -51,6 +51,35 @@ const DEFAULT_PARAMS: SimParams = {
   weatherOverrides: {},
 };
 
+export interface HourlyLog {
+  hour: number;           // 0–23
+  // Energy flows (kWh for the hour)
+  homeLoadKwh: number;
+  solarKwh: number;
+  gridImportKwh: number;
+  gridExportKwh: number;
+  evChargeKwh: number;
+  evDischargeKwh: number; // V2G+V2H combined
+  battChargeKwh: number;
+  battDischargeKwh: number;
+  // Financials
+  gridCostRs: number;
+  gridEarnRs: number;
+  solarSavedRs: number;
+  // State at end of hour
+  evSocEnd: number;
+  homeBattSocEnd: number;
+  // Metadata
+  mode: string;
+  isOutage: boolean;
+  weatherLabel: string;
+  weatherEmoji: string;
+  kmDriven: number;
+  // TOU rate
+  buyRateRs: number;
+  sellRateRs: number;
+}
+
 export interface DailyBill {
   day: number;
   weatherCondition: string;  // e.g. "☀️ Sunny"
@@ -70,6 +99,7 @@ export interface DailyBill {
   netCostRs: number;
   startSoc: number;
   endSoc: number;
+  hourlyLog: HourlyLog[];
 }
 
 export function useSimulation(params: SimParams = DEFAULT_PARAMS) {
@@ -147,6 +177,19 @@ export function useSimulation(params: SimParams = DEFAULT_PARAMS) {
       outageOccurred: false
     });
 
+    const makeEmptyHourAccum = () => ({
+      homeLoadKwh: 0, solarKwh: 0, gridImportKwh: 0, gridExportKwh: 0,
+      evChargeKwh: 0, evDischargeKwh: 0, battChargeKwh: 0, battDischargeKwh: 0,
+      gridCostRs: 0, gridEarnRs: 0, solarSavedRs: 0,
+      evSocEnd: 0, homeBattSocEnd: 0,
+      mode: 'Idle', isOutage: false, weatherLabel: '', weatherEmoji: '', kmDriven: 0,
+      buyRateRs: 0, sellRateRs: 0, minuteCount: 0,
+    });
+    const hourlyAccum = useRef<(ReturnType<typeof makeEmptyHourAccum> & { hour?: number })[]>(
+      Array.from({ length: 24 }, (_, h) => ({ ...makeEmptyHourAccum(), hour: h }))
+    );
+    const hourlyLog = useRef<HourlyLog[]>([]);
+
     const dayStartSocRef = useRef(80.0);
 
     const resetDay = useCallback(() => {
@@ -168,6 +211,8 @@ export function useSimulation(params: SimParams = DEFAULT_PARAMS) {
         totalKmDriven: 0, totalConsumptionKwh: 0,
         outageOccurred: false
       };
+      hourlyAccum.current = Array.from({ length: 24 }, (_, h) => ({ ...makeEmptyHourAccum(), hour: h }));
+      hourlyLog.current = [];
     }, []);
 
     const resetAll = useCallback(() => {
@@ -226,6 +271,7 @@ export function useSimulation(params: SimParams = DEFAULT_PARAMS) {
         netCostRs: parseFloat((stats.totalGridCostRs - stats.v2gEarningsRs).toFixed(2)),
         startSoc: dayStartSocRef.current,
         endSoc: evSoc,
+        hourlyLog: [...hourlyLog.current],
       };
 
       setDailyBills(prev => [...prev, bill]);
@@ -249,6 +295,8 @@ export function useSimulation(params: SimParams = DEFAULT_PARAMS) {
           totalKmDriven: 0, totalConsumptionKwh: 0,
           outageOccurred: false
         };
+        hourlyAccum.current = Array.from({ length: 24 }, (_, h) => ({ ...makeEmptyHourAccum(), hour: h }));
+        hourlyLog.current = [];
         setIsRunning(true);
       }, 1500);
       return () => clearTimeout(t);
@@ -472,6 +520,63 @@ export function useSimulation(params: SimParams = DEFAULT_PARAMS) {
       gridToHouse:  currentFlows.grid_house || 0,
       day: dayNumber,
     }]);
+
+    // ── Per-minute accumulation into hourlyAccum ─────────────────────────────
+    const acc = hourlyAccum.current[hour];
+    if (acc) {
+      acc.homeLoadKwh    += homeLoad * interval_h;
+      acc.solarKwh       += solarPower * interval_h;
+      acc.gridImportKwh  += gridPower > 0 ? gridPower * interval_h : 0;
+      acc.gridExportKwh  += gridPower < 0 ? Math.abs(gridPower) * interval_h : 0;
+      acc.evChargeKwh    += netEvPower > 0 ? netEvPower * interval_h : 0;
+      acc.evDischargeKwh += netEvPower < 0 ? Math.abs(netEvPower) * interval_h : 0;
+      acc.battChargeKwh  += netHomeBatteryPower > 0 ? netHomeBatteryPower * interval_h : 0;
+      acc.battDischargeKwh += netHomeBatteryPower < 0 ? Math.abs(netHomeBatteryPower) * interval_h : 0;
+      acc.gridCostRs     += costDelta;
+      acc.gridEarnRs     += earnDelta;
+      acc.solarSavedRs   += (currentFlows.solar_house * interval_h) * buyRate;
+      acc.kmDriven       += isCommuting ? currentCommuteKmPerHour * interval_h : 0;
+      acc.evSocEnd        = nextEvSoc;
+      acc.homeBattSocEnd  = nextHomeBattSoc;
+      acc.mode            = chargerMode;
+      acc.isOutage        = acc.isOutage || currentGridIsDown;
+      acc.weatherLabel    = currentWeatherRef.current.label;
+      acc.weatherEmoji    = currentWeatherRef.current.emoji;
+      acc.buyRateRs       = buyRate;
+      acc.sellRateRs      = sellRate;
+      acc.minuteCount     = (acc.minuteCount || 0) + 1;
+    }
+
+    // At the last minute of each hour, flush completed hourly snapshot
+    const minuteInHour = minuteOfDay % 60;
+    if (minuteInHour === 59) {
+      const a = hourlyAccum.current[hour];
+      if (a) {
+        hourlyLog.current = [...hourlyLog.current, {
+          hour,
+          homeLoadKwh:     parseFloat(a.homeLoadKwh.toFixed(3)),
+          solarKwh:        parseFloat(a.solarKwh.toFixed(3)),
+          gridImportKwh:   parseFloat(a.gridImportKwh.toFixed(3)),
+          gridExportKwh:   parseFloat(a.gridExportKwh.toFixed(3)),
+          evChargeKwh:     parseFloat(a.evChargeKwh.toFixed(3)),
+          evDischargeKwh:  parseFloat(a.evDischargeKwh.toFixed(3)),
+          battChargeKwh:   parseFloat(a.battChargeKwh.toFixed(3)),
+          battDischargeKwh: parseFloat(a.battDischargeKwh.toFixed(3)),
+          gridCostRs:      parseFloat(a.gridCostRs.toFixed(3)),
+          gridEarnRs:      parseFloat(a.gridEarnRs.toFixed(3)),
+          solarSavedRs:    parseFloat(a.solarSavedRs.toFixed(3)),
+          evSocEnd:        parseFloat(a.evSocEnd.toFixed(1)),
+          homeBattSocEnd:  parseFloat(a.homeBattSocEnd.toFixed(1)),
+          mode:            a.mode,
+          isOutage:        a.isOutage,
+          weatherLabel:    a.weatherLabel,
+          weatherEmoji:    a.weatherEmoji,
+          kmDriven:        parseFloat(a.kmDriven.toFixed(1)),
+          buyRateRs:       a.buyRateRs,
+          sellRateRs:      a.sellRateRs,
+        }];
+      }
+    }
   }, [timeStep, isRunning]);
 
   const currentHour = Math.floor(timeStep / 60);
