@@ -4,7 +4,9 @@ import { MADDPGSchedule, HourlyAction, OutageWindow } from '../../lib/maddpg';
 import { useState } from 'react';
 
 const fmt1 = (n: number) => n.toFixed(1);
+const fmt2 = (n: number) => n.toFixed(2);
 const fmt3 = (n: number) => n.toFixed(3);
+const fmtRs = (n: number) => `₹${n.toFixed(2)}`;
 
 function hourLabel(h: number) {
   const ap = h < 12 ? 'AM' : 'PM';
@@ -12,205 +14,7 @@ function hourLabel(h: number) {
   const nextH = h + 1;
   const ap2 = nextH < 12 ? 'AM' : 'PM';
   const hh2 = nextH === 24 ? 12 : nextH > 12 ? nextH - 12 : nextH;
-  return `${hh}:00 ${ap} – ${hh2}:00 ${ap2}`;
-}
-
-function touLabel(rate: number) {
-  if (rate >= 12) return { label: 'PEAK', cls: 'text-red-400 bg-red-900/30' };
-  if (rate <= 5)  return { label: 'SOLAR', cls: 'text-yellow-400 bg-yellow-900/30' };
-  return { label: 'OFF-PEAK', cls: 'text-blue-400 bg-blue-900/30' };
-}
-
-function modeIcon(mode: string) {
-  if (mode.includes('Solar'))   return '☀️';
-  if (mode.includes('V2H') || mode.includes('EMERGENCY')) return '🔋⚡';
-  if (mode.includes('V2G'))     return '💹';
-  if (mode.includes('Night'))   return '🌙';
-  if (mode.includes('Commute') || mode.includes('Driving')) return '🚗';
-  if (mode.includes('Errand'))  return '🚘';
-  if (mode.includes('Office'))  return '🏢';
-  if (mode.includes('BLACKOUT')) return '🚨';
-  return '💡';
-}
-
-function Badge({ children, cls }: { children: React.ReactNode; cls: string }) {
-  return <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${cls}`}>{children}</span>;
-}
-
-function HourRow({ log, predicted, isExpanded, onToggle, isOutageScheduled }: {
-  log: HourlyLog;
-  predicted: HourlyAction | undefined;
-  isExpanded: boolean;
-  onToggle: () => void;
-  isOutageScheduled: boolean;
-}) {
-  const tou = touLabel(log.buyRateRs);
-  const netFinancial = log.gridEarnRs - log.gridCostRs + log.solarSavedRs;
-  const isProfit = netFinancial >= 0;
-  const predAction = predicted?.evAction ?? 'idle';
-  const outageMismatch = log.isOutage && !isOutageScheduled;
-
-  const rowBg = log.isOutage
-    ? 'bg-red-950/40 border-red-800/40'
-    : isExpanded
-    ? 'bg-slate-800/80 border-slate-600'
-    : 'bg-slate-900/60 border-slate-800 hover:bg-slate-800/50';
-
-  return (
-    <>
-      <tr className={`cursor-pointer border-b transition-colors ${rowBg}`} onClick={onToggle}>
-        <td className="px-2 py-2 text-[11px] font-mono text-slate-300 whitespace-nowrap">
-          <span className="mr-1 text-[9px]">{isExpanded ? '▼' : '▶'}</span>{hourLabel(log.hour)}
-        </td>
-        <td className="px-2 py-2 text-center text-sm" title={log.weatherLabel}>
-          {log.weatherEmoji}{log.isOutage && <span className="ml-0.5 text-red-400 text-[9px]">⚡</span>}
-        </td>
-        <td className="px-2 py-2 text-[10px] text-slate-300 max-w-[110px] truncate" title={log.mode}>
-          {modeIcon(log.mode)} {log.mode}
-        </td>
-        <td className="px-2 py-2 text-center">
-          <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${tou.cls}`}>{tou.label}</span>
-        </td>
-        <td className="px-2 py-2 text-right font-mono text-[11px] text-yellow-400">{log.solarKwh > 0.001 ? fmt3(log.solarKwh) : '–'}</td>
-        <td className="px-2 py-2 text-right font-mono text-[11px] text-red-400">{log.gridImportKwh > 0.001 ? fmt3(log.gridImportKwh) : '–'}</td>
-        <td className="px-2 py-2 text-right font-mono text-[11px] text-emerald-400">{log.gridExportKwh > 0.001 ? fmt3(log.gridExportKwh) : '–'}</td>
-        <td className="px-2 py-2 text-right font-mono text-[11px] text-slate-300">{fmt3(log.homeLoadKwh)}</td>
-        <td className="px-2 py-2 text-right font-mono text-[11px]">
-          {log.evChargeKwh > 0.001 ? <span className="text-cyan-400">+{fmt3(log.evChargeKwh)}</span>
-           : log.evDischargeKwh > 0.001 ? <span className="text-orange-400">−{fmt3(log.evDischargeKwh)}</span>
-           : <span className="text-slate-600">–</span>}
-        </td>
-        <td className="px-2 py-2 text-right font-mono text-[11px]">
-          {log.battChargeKwh > 0.001 ? <span className="text-blue-400">+{fmt3(log.battChargeKwh)}</span>
-           : log.battDischargeKwh > 0.001 ? <span className="text-purple-400">−{fmt3(log.battDischargeKwh)}</span>
-           : <span className="text-slate-600">–</span>}
-        </td>
-        <td className="px-2 py-2 text-right font-mono text-[11px] text-slate-300">{fmt1(log.evSocEnd)}%</td>
-        <td className={`px-2 py-2 text-right font-mono text-[11px] font-bold ${isProfit ? 'text-emerald-400' : 'text-red-400'}`}>
-          {isProfit ? '+' : ''}₹{Math.abs(netFinancial).toFixed(3)}
-        </td>
-      </tr>
-
-      {isExpanded && (
-        <tr className="bg-slate-800/90 border-b border-slate-700">
-          <td colSpan={12} className="px-4 py-4">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-[11px] font-mono">
-
-              {/* Actual Detail */}
-              <div>
-                <h5 className="text-xs font-bold text-cyan-400 mb-2 uppercase border-b border-slate-700 pb-1">⚡ Actual Detail</h5>
-                <div className="space-y-1">
-                  <div className="flex justify-between"><span className="text-slate-400">Weather:</span><span>{log.weatherEmoji} {log.weatherLabel}</span></div>
-                  <div className="flex justify-between"><span className="text-slate-400">Mode:</span><span>{modeIcon(log.mode)} {log.mode}</span></div>
-                  <div className="flex justify-between"><span className="text-slate-400">TOU Buy:</span><span className="text-red-300">₹{log.buyRateRs}/kWh</span></div>
-                  <div className="flex justify-between"><span className="text-slate-400">TOU Sell:</span><span className="text-emerald-300">₹{log.sellRateRs}/kWh</span></div>
-                  {log.isOutage && <div className="text-red-400 font-bold">🚨 GRID OUTAGE ACTIVE THIS HOUR</div>}
-                  <div className="border-t border-slate-700 my-1"/>
-                  <div className="flex justify-between"><span className="text-slate-400">🏠 Home Load:</span><span>{fmt3(log.homeLoadKwh)} kWh</span></div>
-                  <div className="flex justify-between"><span className="text-yellow-400">☀️ Solar:</span><span className="text-yellow-300">{fmt3(log.solarKwh)} kWh</span></div>
-                  <div className="flex justify-between"><span className="text-red-400">🔌 Grid In:</span><span className="text-red-300">{fmt3(log.gridImportKwh)} kWh</span></div>
-                  <div className="flex justify-between"><span className="text-emerald-400">📤 Grid Out:</span><span className="text-emerald-300">{fmt3(log.gridExportKwh)} kWh</span></div>
-                  {log.evChargeKwh > 0.001 && <div className="flex justify-between"><span className="text-cyan-400">🔋 EV Charged:</span><span className="text-cyan-300">+{fmt3(log.evChargeKwh)} kWh</span></div>}
-                  {log.evDischargeKwh > 0.001 && <div className="flex justify-between"><span className="text-orange-400">🔋 EV Discharged:</span><span className="text-orange-300">−{fmt3(log.evDischargeKwh)} kWh</span></div>}
-                  {log.battChargeKwh > 0.001 && <div className="flex justify-between"><span className="text-blue-400">🪫 Batt Charged:</span><span className="text-blue-300">+{fmt3(log.battChargeKwh)} kWh</span></div>}
-                  {log.battDischargeKwh > 0.001 && <div className="flex justify-between"><span className="text-purple-400">🪫 Batt Discharged:</span><span className="text-purple-300">−{fmt3(log.battDischargeKwh)} kWh</span></div>}
-                  {log.kmDriven > 0 && <div className="flex justify-between"><span className="text-slate-400">🚗 km Driven:</span><span>{fmt1(log.kmDriven)} km</span></div>}
-                  <div className="flex justify-between"><span className="text-slate-400">EV SOC End:</span><span>{fmt1(log.evSocEnd)}%</span></div>
-                  <div className="flex justify-between"><span className="text-slate-400">Home Batt End:</span><span>{fmt1(log.homeBattSocEnd)}%</span></div>
-                  <div className="border-t border-slate-700 my-1"/>
-                  <div className="flex justify-between"><span className="text-red-400">Grid Cost:</span><span>₹{log.gridCostRs.toFixed(3)}</span></div>
-                  <div className="flex justify-between"><span className="text-emerald-400">Grid Earn:</span><span>₹{log.gridEarnRs.toFixed(3)}</span></div>
-                  <div className="flex justify-between"><span className="text-yellow-400">Solar Saved:</span><span>₹{log.solarSavedRs.toFixed(3)}</span></div>
-                  <div className={`flex justify-between font-bold border-t border-slate-600 pt-1 ${isProfit ? 'text-emerald-400' : 'text-red-400'}`}>
-                    <span>Net This Hour:</span><span>{isProfit ? '+' : ''}₹{netFinancial.toFixed(3)}</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* MADDPG Prediction */}
-              <div>
-                <h5 className="text-xs font-bold text-purple-400 mb-2 uppercase border-b border-slate-700 pb-1">🤖 MADDPG Predicted</h5>
-                {predicted ? (
-                  <div className="space-y-1">
-                    <div className="flex justify-between"><span className="text-slate-400">EV Action:</span><span className="text-purple-300">{predicted.evAction}</span></div>
-                    <div className="flex justify-between"><span className="text-slate-400">EV Power:</span><span className="text-purple-300">{predicted.evPowerKw > 0 ? '+' : ''}{predicted.evPowerKw.toFixed(2)} kW</span></div>
-                    <div className="flex justify-between"><span className="text-slate-400">Home Action:</span><span className="text-purple-300">{predicted.homeAction}</span></div>
-                    <div className="flex justify-between"><span className="text-slate-400">Grid Action:</span><span className="text-purple-300">{predicted.gridAction}</span></div>
-                    <div className="flex justify-between"><span className="text-slate-400">Confidence:</span><span className="text-purple-300">{(predicted.confidence * 100).toFixed(0)}%</span></div>
-                    <div className="border-t border-slate-700 my-1"/>
-                    <div className="text-slate-500 text-[10px]">Agent Rewards:</div>
-                    <div className="flex justify-between"><span className="text-slate-400">↳ EV:</span><span className="text-green-300">{predicted.agentRewards.ev.toFixed(2)}</span></div>
-                    <div className="flex justify-between"><span className="text-slate-400">↳ Home:</span><span className="text-green-300">{predicted.agentRewards.home.toFixed(2)}</span></div>
-                    <div className="flex justify-between"><span className="text-slate-400">↳ Grid:</span><span className="text-green-300">{predicted.agentRewards.grid.toFixed(2)}</span></div>
-                    <div className="border-t border-slate-700 mt-1 pt-1 text-slate-400 italic text-[10px]">
-                      💬 &quot;{predicted.recommendation}&quot;
-                    </div>
-                  </div>
-                ) : (
-                  <div className="text-slate-600 italic">No MADDPG data for this hour.</div>
-                )}
-              </div>
-
-              {/* Comparison */}
-              <div>
-                <h5 className="text-xs font-bold text-amber-400 mb-2 uppercase border-b border-slate-700 pb-1">📊 Actual vs Predicted</h5>
-                <div className="space-y-1.5">
-                  <div className="flex flex-wrap gap-1 mb-2">
-                    {predAction === 'charge' && log.evChargeKwh > 0.05
-                      ? <Badge cls="bg-emerald-900/50 text-emerald-400">✅ EV Charged as planned</Badge>
-                      : predAction === 'discharge_v2g' && log.evDischargeKwh > 0.05
-                      ? <Badge cls="bg-emerald-900/50 text-emerald-400">✅ V2G executed</Badge>
-                      : predAction === 'discharge_v2h' && log.evDischargeKwh > 0.05
-                      ? <Badge cls="bg-emerald-900/50 text-emerald-400">✅ V2H executed</Badge>
-                      : predAction === 'idle' && log.evChargeKwh < 0.05 && log.evDischargeKwh < 0.05
-                      ? <Badge cls="bg-emerald-900/50 text-emerald-400">✅ EV idle as planned</Badge>
-                      : <Badge cls="bg-amber-900/50 text-amber-400">⚠️ EV deviated from plan</Badge>
-                    }
-                    {outageMismatch && <Badge cls="bg-red-900/50 text-red-400">🚨 Unplanned outage</Badge>}
-                    {log.isOutage && isOutageScheduled && <Badge cls="bg-blue-900/50 text-blue-400">✅ Scheduled outage</Badge>}
-                    {log.solarKwh > 0.1 && <Badge cls="bg-yellow-900/50 text-yellow-400">☀️ Solar active</Badge>}
-                    {log.kmDriven > 0 && <Badge cls="bg-slate-700 text-slate-300">🚗 EV on road</Badge>}
-                  </div>
-
-                  {predicted && (
-                    <div className="space-y-1">
-                      <div className="text-[10px] text-slate-500 uppercase mb-1">Energy Comparison</div>
-                      {[
-                        { label: 'Grid Import', actual: log.gridImportKwh, pred: Math.max(0, predicted.evPowerKw) },
-                        { label: 'Solar Gen', actual: log.solarKwh, pred: 0 },
-                        { label: 'EV kWh', actual: log.evChargeKwh - log.evDischargeKwh, pred: predicted.evPowerKw },
-                      ].map(row => {
-                        const diff = row.actual - row.pred;
-                        return (
-                          <div key={row.label} className="flex items-center gap-1 text-[10px]">
-                            <span className="w-16 text-slate-400 shrink-0">{row.label}</span>
-                            <span className="w-10 text-right text-slate-200">{row.actual.toFixed(2)}</span>
-                            <span className="text-slate-600 text-[8px]">vs</span>
-                            <span className="w-10 text-slate-500">{row.pred.toFixed(2)}</span>
-                            <div className="flex-1 h-1 bg-slate-700 rounded overflow-hidden">
-                              <div className={`h-full ${Math.abs(diff) < 0.1 ? 'bg-emerald-500' : diff < 0 ? 'bg-blue-500' : 'bg-red-500'}`}
-                                style={{ width: `${Math.min(100, Math.abs(diff / (Math.abs(row.pred) + 0.01)) * 100)}%` }} />
-                            </div>
-                            <span className={`w-14 text-right font-bold ${Math.abs(diff) < 0.05 ? 'text-slate-400' : diff > 0 ? 'text-red-400' : 'text-emerald-400'}`}>
-                              {diff > 0 ? '+' : ''}{diff.toFixed(2)}
-                            </span>
-                          </div>
-                        );
-                      })}
-                      <div className="border-t border-slate-700 mt-2 pt-1">
-                        <div className="flex justify-between"><span className="text-slate-400">Hour Net:</span><span className={isProfit ? 'text-emerald-400' : 'text-red-400'}>{isProfit ? '+' : ''}₹{netFinancial.toFixed(3)}</span></div>
-                        <div className="flex justify-between"><span className="text-slate-400">MADDPG Reward:</span><span className="text-purple-300">{(predicted.agentRewards.ev + predicted.agentRewards.home + predicted.agentRewards.grid).toFixed(2)}</span></div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          </td>
-        </tr>
-      )}
-    </>
-  );
+  return `${hh}:00 ${ap} - ${hh2}:00 ${ap2}`;
 }
 
 export default function DailyBillsTab({
@@ -223,21 +27,12 @@ export default function DailyBillsTab({
   outages?: OutageWindow[];
 }) {
   const [selectedDay, setSelectedDay] = useState<number>(bills.length > 0 ? bills[bills.length - 1].day : 1);
-  const [expandedHours, setExpandedHours] = useState<Set<number>>(new Set());
-  const [expandAll, setExpandAll] = useState(false);
-
-  const toggleHour = (h: number) => {
-    setExpandedHours(prev => { const n = new Set(prev); n.has(h) ? n.delete(h) : n.add(h); return n; });
-  };
 
   if (bills.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center p-12 text-slate-400">
-        <svg className="w-16 h-16 mb-4 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-        </svg>
         <p className="text-lg">No daily bills yet.</p>
-        <p className="text-sm mt-2">Run the simulation to end of Day 1 to see your first detailed bill.</p>
+        <p className="text-sm mt-2">Run the simulation to end of Day 1 to see your detailed bill.</p>
       </div>
     );
   }
@@ -248,153 +43,265 @@ export default function DailyBillsTab({
   const totalNetRs = bill.v2gEarningsRs + bill.v2hSavedCostRs + bill.solarSavedCostRs - bill.totalGridCostRs;
   const isProfit = totalNetRs >= 0;
 
+  // Pie chart variables
+  const totalCredits = bill.v2gEarningsRs + bill.v2hSavedCostRs + bill.solarSavedCostRs;
+  const totalCharges = bill.totalGridCostRs;
+  
   return (
-    <div className="flex flex-col lg:flex-row h-full overflow-hidden">
-      {/* Sidebar */}
-      <div className="w-full lg:w-[175px] shrink-0 border-r border-slate-700 overflow-y-auto bg-slate-900">
+    <div className="flex flex-col lg:flex-row h-full overflow-hidden bg-slate-950 font-sans text-slate-300">
+      {/* Sidebar for Day Selection */}
+      <div className="w-full lg:w-[150px] shrink-0 border-r border-slate-700 bg-slate-900 overflow-y-auto">
         <div className="px-3 py-2 border-b border-slate-700">
-          <h3 className="text-[10px] font-bold text-cyan-400 uppercase tracking-wider">Daily Bills</h3>
+          <h3 className="text-[10px] font-bold text-cyan-400 uppercase tracking-wider">Invoices</h3>
         </div>
         {bills.map(b => (
-          <button key={b.day} onClick={() => { setSelectedDay(b.day); setExpandedHours(new Set()); setExpandAll(false); }}
-            className={`w-full text-left px-3 py-2.5 border-b border-slate-800 transition-colors ${selectedDay === b.day ? 'bg-slate-700 border-l-2 border-l-cyan-400' : 'hover:bg-slate-800'}`}>
-            <div className="flex items-center gap-1.5">
-              <span>{b.weatherEmoji || '🌡️'}</span>
-              <span className="font-bold text-sm text-cyan-300">Day {b.day}</span>
+          <button key={b.day} onClick={() => setSelectedDay(b.day)}
+            className={`w-full text-left px-3 py-3 border-b border-slate-800 transition-colors ${selectedDay === b.day ? 'bg-slate-700 border-l-4 border-l-cyan-400' : 'hover:bg-slate-800'}`}>
+            <div className="font-bold text-sm text-cyan-300">Day {b.day}</div>
+            <div className="text-[10px] text-slate-500 mt-1 truncate">{b.weatherCondition}</div>
+            <div className={`text-xs font-bold mt-1 ${b.netCostRs <= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+              {b.netCostRs <= 0 ? 'Credit' : 'Due'}: ₹{Math.abs(b.netCostRs).toFixed(2)}
             </div>
-            <div className="text-[10px] text-slate-500 mt-0.5 truncate">{b.weatherCondition}</div>
-            <div className={`text-xs font-bold mt-0.5 ${b.netCostRs <= 0 ? 'text-emerald-400' : 'text-red-400'}`}>₹{b.netCostRs.toFixed(2)}</div>
-            {b.outageOccurred && <div className="text-[9px] text-red-400">⚡ Outage</div>}
-            <div className="text-[9px] text-slate-600">{b.hourlyLog?.length ?? 0} hrs logged</div>
           </button>
         ))}
       </div>
 
-      {/* Main */}
-      <div className="flex-1 overflow-y-auto bg-slate-950">
-        {/* Header */}
-        <div className="sticky top-0 z-10 bg-slate-900 border-b border-slate-700 px-4 py-2.5">
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="text-xl font-black text-slate-100">Day {bill.day}</span>
-            <span className="text-slate-400 text-sm">{bill.weatherEmoji} {bill.weatherCondition}</span>
-            {bill.outageOccurred && <span className="px-2 py-0.5 bg-red-900/60 text-red-400 text-xs font-bold rounded-full border border-red-700">⚡ Outage</span>}
-            <div className="flex gap-4 ml-auto text-[11px] font-mono">
-              <div className="text-center"><div className="text-slate-500">Solar</div><div className="text-yellow-400 font-bold">{bill.solarGeneratedKwh} kWh</div></div>
-              <div className="text-center"><div className="text-slate-500">Grid In</div><div className="text-red-400 font-bold">{bill.totalGridKwh} kWh</div></div>
-              <div className="text-center"><div className="text-slate-500">V2G+V2H</div><div className="text-orange-400 font-bold">{(bill.v2gExportKwh + bill.v2hUsedKwh).toFixed(2)} kWh</div></div>
-              <div className="text-center"><div className="text-slate-500">km</div><div className="text-slate-200 font-bold">{bill.totalKmDriven}</div></div>
-              <div className="text-center"><div className="text-slate-500">Net</div><div className={`font-bold ${isProfit ? 'text-emerald-400' : 'text-red-400'}`}>{isProfit ? '+' : ''}₹{totalNetRs.toFixed(2)}</div></div>
+      {/* Invoice Document Viewer */}
+      <div className="flex-1 overflow-y-auto p-4 lg:p-8 flex justify-center">
+        {/* The "Paper" Document */}
+        <div className="w-full max-w-[1000px] bg-slate-900 border border-slate-700 shadow-2xl rounded-sm p-6 lg:p-10">
+          
+          {/* Header */}
+          <div className="flex flex-col md:flex-row justify-between items-start mb-10 pb-6 border-b-2 border-cyan-500">
+            <div>
+              <h1 className="text-3xl font-black text-cyan-400 tracking-tight flex items-center gap-2">
+                <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                NEXUS-EV
+              </h1>
+              <p className="text-slate-400 text-sm mt-1">Smart Energy Account Statement</p>
             </div>
-          </div>
-        </div>
-
-        {/* MADDPG Comparison Banner */}
-        {maddpgSchedule && (
-          <div className="mx-4 my-3 bg-slate-800/80 border border-purple-800/40 rounded-lg p-4">
-            <h4 className="text-[10px] font-bold text-purple-400 uppercase tracking-wider mb-3">📊 Day {bill.day}: Actual vs MADDPG Prediction</h4>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-[11px] font-mono">
-              {[
-                { label: 'Grid Cost', actual: bill.totalGridCostRs, pred: maddpgSchedule.totalEstimatedCost, lowerBetter: true, unit: '₹' },
-                { label: 'V2G Earnings', actual: bill.v2gEarningsRs, pred: maddpgSchedule.totalEstimatedEarnings, lowerBetter: false, unit: '₹' },
-                { label: 'Solar (kWh)', actual: bill.solarGeneratedKwh, pred: maddpgSchedule.solarEnergyKwh, lowerBetter: false, unit: 'kWh' },
-                { label: 'Net Financial', actual: totalNetRs, pred: maddpgSchedule.netEstimate, lowerBetter: false, unit: '₹' },
-              ].map(row => {
-                const better = row.lowerBetter ? row.actual <= row.pred : row.actual >= row.pred;
-                const diff = row.actual - row.pred;
-                return (
-                  <div key={row.label} className="bg-slate-900 rounded p-2">
-                    <div className="text-slate-500">{row.label}</div>
-                    <div className={`font-bold ${row.lowerBetter ? 'text-red-400' : 'text-emerald-400'}`}>{row.unit === '₹' ? '₹' : ''}{row.actual.toFixed(2)}{row.unit !== '₹' ? ' ' + row.unit : ''}</div>
-                    <div className="text-slate-600">Pred: {row.unit === '₹' ? '₹' : ''}{row.pred.toFixed(2)}{row.unit !== '₹' ? ' ' + row.unit : ''}</div>
-                    <div className={`font-bold text-[10px] ${better ? 'text-emerald-400' : 'text-red-400'}`}>
-                      {better ? '✅' : '❌'} {diff > 0 ? '+' : ''}{diff.toFixed(2)}{row.unit !== '₹' ? ' ' + row.unit : '₹'}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            <div className="flex flex-wrap gap-1.5 mt-2 text-[10px]">
-              <span className="px-2 py-0.5 rounded bg-slate-700 text-slate-300">V2G sessions: {bill.v2gExportKwh > 0 ? '✅ Yes' : '❌ None'} | Predicted: {maddpgSchedule.v2gSessions}</span>
-              <span className="px-2 py-0.5 rounded bg-slate-700 text-slate-300">MADDPG Reward: {maddpgSchedule.overallReward.toFixed(1)}</span>
-              <span className="px-2 py-0.5 rounded bg-slate-700 text-slate-300">Conflicts resolved: {maddpgSchedule.conflictsResolved}</span>
-              {bill.outageOccurred && <span className="px-2 py-0.5 rounded bg-red-900/40 text-red-400">⚡ Outage impacted day</span>}
-            </div>
-          </div>
-        )}
-
-        {/* Hourly Table */}
-        {hours.length === 0 ? (
-          <div className="text-center py-12 text-slate-500 text-sm">
-            Hourly data is saved as the simulation completes each hour. Run the simulation to see hour-by-hour breakdowns.
-          </div>
-        ) : (
-          <div className="px-4 pb-6">
-            <div className="flex items-center justify-between mb-2">
-              <h4 className="text-[10px] font-bold text-cyan-400 uppercase tracking-wider">{hours.length} hours recorded · click any row to expand</h4>
-              <button onClick={() => { const next = !expandAll; setExpandAll(next); setExpandedHours(next ? new Set(hours.map(h => h.hour)) : new Set()); }}
-                className="text-[10px] px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-slate-600">
-                {expandAll ? 'Collapse All' : 'Expand All'}
-              </button>
-            </div>
-            <div className="overflow-x-auto rounded-lg border border-slate-700">
-              <table className="w-full text-left border-collapse min-w-[900px]">
-                <thead>
-                  <tr className="bg-slate-800 text-slate-400 text-[10px] uppercase tracking-wider">
-                    <th className="px-2 py-2">Hour</th>
-                    <th className="px-2 py-2 text-center">Wthr</th>
-                    <th className="px-2 py-2">Mode</th>
-                    <th className="px-2 py-2 text-center">TOU</th>
-                    <th className="px-2 py-2 text-right text-yellow-400">Solar</th>
-                    <th className="px-2 py-2 text-right text-red-400">Grid In</th>
-                    <th className="px-2 py-2 text-right text-emerald-400">Grid Out</th>
-                    <th className="px-2 py-2 text-right">Home</th>
-                    <th className="px-2 py-2 text-right text-cyan-400">EV kWh</th>
-                    <th className="px-2 py-2 text-right text-blue-400">Batt kWh</th>
-                    <th className="px-2 py-2 text-right">EV%</th>
-                    <th className="px-2 py-2 text-right">Net ₹</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {hours.map(log => (
-                    <HourRow key={log.hour} log={log}
-                      predicted={mActions.find(a => a.hour === log.hour)}
-                      isExpanded={expandedHours.has(log.hour)}
-                      onToggle={() => toggleHour(log.hour)}
-                      isOutageScheduled={outages.some(o => log.hour >= o.startHour && log.hour < o.endHour)}
-                    />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Summary footer */}
-            <div className="mt-4 bg-slate-800 rounded-lg border border-slate-700 p-4">
-              <h4 className="text-[10px] font-bold text-slate-300 uppercase tracking-wider mb-3">📑 Day {bill.day} Summary</h4>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-[11px] font-mono">
-                {[
-                  ['Total Consumption', `${bill.totalConsumptionKwh} kWh`, 'text-slate-200'],
-                  ['Solar Generated', `${bill.solarGeneratedKwh} kWh`, 'text-yellow-400'],
-                  ['Grid Imported', `${bill.totalGridKwh} kWh`, 'text-red-400'],
-                  ['V2G Export', `${bill.v2gExportKwh} kWh`, 'text-emerald-400'],
-                  ['V2H Used', `${bill.v2hUsedKwh} kWh`, 'text-purple-400'],
-                  ['EV Charge Cost', `₹${bill.evChargingCostRs}`, 'text-red-400'],
-                  ['Solar Savings', `₹${bill.solarSavedCostRs}`, 'text-yellow-400'],
-                  ['V2G Earnings', `₹${bill.v2gEarningsRs}`, 'text-emerald-400'],
-                  ['V2H Savings', `₹${bill.v2hSavedCostRs}`, 'text-purple-400'],
-                  ['EV SOC Start', `${bill.startSoc.toFixed(1)}%`, 'text-slate-200'],
-                  ['EV SOC End', `${bill.endSoc.toFixed(1)}%`, 'text-slate-200'],
-                  ['km Driven', `${bill.totalKmDriven} km`, 'text-slate-200'],
-                ].map(([label, val, cls]) => (
-                  <div key={label as string}><span className="text-slate-500">{label}:</span><br/><span className={`font-bold ${cls}`}>{val}</span></div>
-                ))}
-                <div className="col-span-2 md:col-span-1">
-                  <span className="text-slate-500">Net Financial:</span><br/>
-                  <span className={`font-black text-lg ${isProfit ? 'text-emerald-400' : 'text-red-400'}`}>{isProfit ? '+' : ''}₹{totalNetRs.toFixed(2)}</span>
-                </div>
+            <div className="mt-4 md:mt-0 text-right">
+              <div className="text-sm">
+                <span className="text-slate-500">ACCOUNT NUMBER:</span> <span className="text-slate-200 font-mono">NX-{bill.day.toString().padStart(6, '0')}</span>
+              </div>
+              <div className="text-sm mt-1">
+                <span className="text-slate-500">BILLING CYCLE:</span> <span className="text-slate-200">Day {bill.day}</span>
+              </div>
+              <div className="text-sm mt-1">
+                <span className="text-slate-500">WEATHER:</span> <span className="text-slate-200">{bill.weatherEmoji} {bill.weatherCondition}</span>
+              </div>
+              <div className="text-sm mt-1">
+                <span className="text-slate-500">TOTAL USAGE:</span> <span className="text-slate-200">{fmt2(bill.totalConsumptionKwh)} kWh</span>
               </div>
             </div>
           </div>
-        )}
+
+          {/* Main 2-column layout */}
+          <div className="flex flex-col lg:flex-row gap-10">
+            
+            {/* Left Column (Detail of Charges) */}
+            <div className="flex-1">
+              <h2 className="text-lg font-bold text-cyan-400 mb-4 border-b border-slate-700 pb-2">Detail of Current Charges</h2>
+              
+              {/* Electric Service */}
+              <div className="mb-6">
+                <h3 className="text-md font-bold text-slate-200 mb-2 italic text-cyan-300">Electric Service</h3>
+                <div className="text-xs text-slate-400 mb-4 grid grid-cols-2 gap-2">
+                  <div><span className="font-semibold text-slate-300">Rate:</span> Time of Use (TOU)</div>
+                  <div><span className="font-semibold text-slate-300">Meter Number:</span> EV-59281A</div>
+                  <div><span className="font-semibold text-slate-300">Billing Period:</span> 24 Hours</div>
+                  <div><span className="font-semibold text-slate-300">Outage Status:</span> {bill.outageOccurred ? <span className="text-red-400">Interruption Recorded</span> : 'Stable'}</div>
+                </div>
+
+                <div className="bg-slate-800/50 p-4 rounded border border-slate-700">
+                  <div className="flex justify-between text-sm font-bold border-b border-slate-700 pb-2 mb-2 text-slate-400">
+                    <span>ELECTRICITY CHARGES</span>
+                    <span>Amount (₹)</span>
+                  </div>
+                  <div className="flex justify-between text-sm py-1">
+                    <span>Grid Import Delivery ({fmt2(bill.totalGridKwh)} kWh)</span>
+                    <span>{fmtRs(bill.totalGridCostRs)}</span>
+                  </div>
+                  <div className="flex justify-between text-xs text-slate-500 py-1 pl-4">
+                    <span>Includes EV Charging Cost</span>
+                    <span>{fmtRs(bill.evChargingCostRs)}</span>
+                  </div>
+                  <div className="flex justify-between text-sm font-bold pt-2 mt-2 border-t border-slate-700">
+                    <span className="text-cyan-400">Total Electric Charges</span>
+                    <span className="text-cyan-400">{fmtRs(bill.totalGridCostRs)}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Credits & Offsets */}
+              <div className="mb-6">
+                <h3 className="text-md font-bold text-slate-200 mb-2 italic text-emerald-400">Generation & Credits</h3>
+                <div className="bg-slate-800/50 p-4 rounded border border-slate-700">
+                  <div className="flex justify-between text-sm font-bold border-b border-slate-700 pb-2 mb-2 text-slate-400">
+                    <span>CREDITS & SAVINGS</span>
+                    <span>Amount (₹)</span>
+                  </div>
+                  
+                  {bill.v2gEarningsRs > 0 && (
+                    <div className="flex justify-between text-sm py-1">
+                      <span>V2G Grid Export ({fmt2(bill.v2gExportKwh)} kWh)</span>
+                      <span className="text-emerald-400">-{fmtRs(bill.v2gEarningsRs)}</span>
+                    </div>
+                  )}
+                  {bill.solarSavedCostRs > 0 && (
+                    <div className="flex justify-between text-sm py-1">
+                      <span>Solar Self-Consumption ({fmt2(bill.solarGeneratedKwh)} kWh)</span>
+                      <span className="text-emerald-400">-{fmtRs(bill.solarSavedCostRs)}</span>
+                    </div>
+                  )}
+                  {bill.v2hSavedCostRs > 0 && (
+                    <div className="flex justify-between text-sm py-1">
+                      <span>V2H Backup Power ({fmt2(bill.v2hUsedKwh)} kWh)</span>
+                      <span className="text-emerald-400">-{fmtRs(bill.v2hSavedCostRs)}</span>
+                    </div>
+                  )}
+                  
+                  {totalCredits === 0 && (
+                    <div className="text-sm py-1 text-slate-500 italic">No credits generated this period.</div>
+                  )}
+                  
+                  <div className="flex justify-between text-sm font-bold pt-2 mt-2 border-t border-slate-700">
+                    <span className="text-emerald-400">Total Credits Applied</span>
+                    <span className="text-emerald-400">-{fmtRs(totalCredits)}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Final Calculation */}
+              <div className="bg-cyan-900/20 p-4 rounded border border-cyan-800">
+                <div className="flex justify-between text-lg font-black">
+                  <span className="text-slate-100">Total Current Charges</span>
+                  <span className={isProfit ? 'text-emerald-400' : 'text-red-400'}>
+                    {isProfit ? 'Credit: ' : ''}{fmtRs(Math.abs(totalNetRs))}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Right Column (Summary & MADDPG) */}
+            <div className="w-full lg:w-[320px] flex flex-col gap-6">
+              
+              <div className="border border-slate-700 rounded bg-slate-800/30 p-4">
+                <h3 className="font-bold text-cyan-400 text-center mb-4">Breakdown of Financials</h3>
+                <div className="relative w-40 h-40 mx-auto rounded-full border-8 border-slate-800 flex items-center justify-center shadow-inner overflow-hidden">
+                  {/* CSS pie chart trick using conic-gradient */}
+                  {totalCharges + totalCredits > 0 ? (
+                    <div 
+                      className="absolute inset-0"
+                      style={{
+                        background: `conic-gradient(#f87171 ${(totalCharges/(totalCharges+totalCredits))*100}%, #34d399 0)`
+                      }}
+                    />
+                  ) : (
+                    <div className="absolute inset-0 bg-slate-700" />
+                  )}
+                  <div className="w-28 h-28 bg-slate-900 rounded-full z-10 flex flex-col items-center justify-center text-center">
+                    <span className="text-[10px] text-slate-400">Net Impact</span>
+                    <span className={`text-sm font-bold ${isProfit ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {fmtRs(Math.abs(totalNetRs))}
+                    </span>
+                  </div>
+                </div>
+                <div className="flex justify-between mt-6 text-xs px-4">
+                  <div className="flex items-center gap-2"><div className="w-3 h-3 bg-red-400 rounded-full" /> Charges</div>
+                  <div className="flex items-center gap-2"><div className="w-3 h-3 bg-emerald-400 rounded-full" /> Credits</div>
+                </div>
+              </div>
+
+              {maddpgSchedule && (
+                <div className="border border-purple-900/50 rounded bg-slate-800/30 p-4">
+                  <h3 className="text-xs font-bold text-purple-400 uppercase tracking-wider border-b border-slate-700 pb-2 mb-3">
+                    MADDPG AI Prediction Match
+                  </h3>
+                  <div className="space-y-3 text-xs">
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Predicted Grid Cost:</span>
+                      <span className="font-mono text-red-300">{fmtRs(maddpgSchedule.totalEstimatedCost)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Predicted Earnings:</span>
+                      <span className="font-mono text-emerald-300">{fmtRs(maddpgSchedule.totalEstimatedEarnings)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Predicted Net:</span>
+                      <span className="font-mono text-slate-200">{fmtRs(Math.abs(maddpgSchedule.netEstimate))}</span>
+                    </div>
+                    <div className="border-t border-slate-700 pt-2 flex justify-between font-bold">
+                      <span className="text-slate-300">Variance:</span>
+                      <span className={Math.abs(totalNetRs - maddpgSchedule.netEstimate) < 5 ? 'text-emerald-400' : 'text-amber-400'}>
+                        {Math.abs(totalNetRs - maddpgSchedule.netEstimate).toFixed(2)} ₹
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+            </div>
+          </div>
+
+          {/* Detailed Hourly Log (Usage history) */}
+          <div className="mt-12 pt-8 border-t-2 border-slate-700">
+            <h2 className="text-lg font-bold text-cyan-400 mb-6">Detailed Hourly Usage Log</h2>
+            
+            {hours.length === 0 ? (
+              <p className="text-slate-500 text-sm italic">No hourly records generated yet.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="border-b-2 border-slate-700 text-slate-400 uppercase tracking-wider bg-slate-800">
+                      <th className="py-3 px-2 font-semibold">Time Period</th>
+                      <th className="py-3 px-2 font-semibold">Event / Mode</th>
+                      <th className="py-3 px-2 font-semibold text-right">Solar (kWh)</th>
+                      <th className="py-3 px-2 font-semibold text-right">EV Δ (kWh)</th>
+                      <th className="py-3 px-2 font-semibold text-right">Grid In (kWh)</th>
+                      <th className="py-3 px-2 font-semibold text-right">Grid Out (kWh)</th>
+                      <th className="py-3 px-2 font-semibold text-right">Rate</th>
+                      <th className="py-3 px-2 font-semibold text-right">Amount (₹)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {hours.map((log, i) => {
+                      const netHour = log.gridCostRs - log.gridEarnRs - log.solarSavedRs;
+                      return (
+                        <tr key={i} className={`border-b border-slate-800 ${log.isOutage ? 'bg-red-950/20' : i % 2 === 0 ? 'bg-slate-900' : 'bg-slate-800/30'} hover:bg-slate-800 transition-colors`}>
+                          <td className="py-2 px-2 font-mono text-slate-400">{hourLabel(log.hour)}</td>
+                          <td className="py-2 px-2">
+                            <span className="font-semibold text-slate-300">{log.mode}</span>
+                            {log.isOutage && <span className="ml-2 text-[10px] text-red-400 font-bold bg-red-900/30 px-1 rounded border border-red-800">OUTAGE</span>}
+                          </td>
+                          <td className="py-2 px-2 text-right font-mono text-yellow-400">{log.solarKwh > 0 ? fmt3(log.solarKwh) : '-'}</td>
+                          <td className="py-2 px-2 text-right font-mono">
+                            {log.evChargeKwh > 0 ? <span className="text-cyan-400">+{fmt3(log.evChargeKwh)}</span> 
+                             : log.evDischargeKwh > 0 ? <span className="text-orange-400">-{fmt3(log.evDischargeKwh)}</span> 
+                             : <span className="text-slate-600">-</span>}
+                          </td>
+                          <td className="py-2 px-2 text-right font-mono text-red-400">{log.gridImportKwh > 0 ? fmt3(log.gridImportKwh) : '-'}</td>
+                          <td className="py-2 px-2 text-right font-mono text-emerald-400">{log.gridExportKwh > 0 ? fmt3(log.gridExportKwh) : '-'}</td>
+                          <td className="py-2 px-2 text-right text-[10px] text-slate-500">
+                            ₹{fmt2(log.buyRateRs)}
+                          </td>
+                          <td className={`py-2 px-2 text-right font-mono font-bold ${netHour < 0 ? 'text-emerald-400' : netHour > 0 ? 'text-red-400' : 'text-slate-500'}`}>
+                            {netHour === 0 ? '0.00' : (netHour < 0 ? 'Cr: ' + fmtRs(Math.abs(netHour)) : fmtRs(netHour))}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+          
+          <div className="mt-8 text-center text-[10px] text-slate-500 pt-4 border-t border-slate-800 uppercase tracking-widest">
+            End of Statement • Nexus-EV System Automated Generation
+          </div>
+        </div>
       </div>
     </div>
   );
